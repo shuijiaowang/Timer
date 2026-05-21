@@ -1,8 +1,18 @@
+import {
+    cancelTask,
+    createCountdownTask,
+    createScheduleTask,
+    getTaskSnapshot,
+    initTaskEngine,
+    listTasks,
+    startCountdownTask,
+} from '../core/tasks/index.js';
+
 export default defineBackground(() => {
     console.log('Background script started', {id: browser.runtime.id});
-    browser.action.onClicked.addListener((tab) => {
-        console.log('扩展图标被点击', tab);
-    });
+
+    initTaskEngine();
+
     browser.runtime.onMessage.addListener(async (message) => {
         if (message.type === 'popup_opened') {
             console.log('popup 已打开');
@@ -11,22 +21,51 @@ export default defineBackground(() => {
             const height = Math.max(currentWindow.height - 300, 200);
             const left = Math.round((currentWindow.width - width) / 2);
             const top = Math.round((currentWindow.height - height) / 2);
-            // 打开居中窗口
             await browser.windows.create({
-                url: "/popup_true.html", // 你的 popup 页面 //这里需要是实际的popup.html，而不是/popup/index.html,不然会找不到
-                type: "popup", // 无边栏窗口
-                // type: "normal", // 无边栏窗口
+                url: '/popup_true.html',
+                type: 'popup',
                 width,
                 height,
                 left,
                 top,
             });
+            return;
+        }
+
+        if (message.type === 'timer_task') {
+            const {action, payload = {}} = message;
+            try {
+                switch (action) {
+                    case 'createSchedule':
+                        return {
+                            ok: true,
+                            task: await createScheduleTask(payload),
+                        };
+                    case 'createCountdown':
+                        return {
+                            ok: true,
+                            task: await createCountdownTask(payload),
+                        };
+                    case 'startCountdown':
+                        return {
+                            ok: true,
+                            task: await startCountdownTask(payload.id),
+                        };
+                    case 'cancel':
+                        return {
+                            ok: true,
+                            task: await cancelTask(payload.id),
+                        };
+                    case 'list':
+                        return {ok: true, tasks: await listTasks()};
+                    case 'get':
+                        return {ok: true, task: await getTaskSnapshot(payload.id)};
+                    default:
+                        return {ok: false, error: `未知 action: ${action}`};
+                }
+            } catch (err) {
+                return {ok: false, error: err?.message ?? String(err)};
+            }
         }
     });
-
-
-})
-
-
-
-
+});

@@ -1,5 +1,3 @@
-import {appState} from "./config.js";
-
 /**
  * 统一的系统通知（browser.notifications.create）
  * @param {object} content 展示内容

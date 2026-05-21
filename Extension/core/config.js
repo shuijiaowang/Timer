@@ -1,4 +1,6 @@
 // core/config.js
+import {storage} from '#imports';
+
 export const APP_CONFIG = {
     // 快捷键配置
     KEYBOARD: {},
@@ -9,11 +11,29 @@ export const APP_CONFIG = {
 export const DEFAULT_DOMAIN_CONFIG = {
     pluginEnabled: false,
 };
+function getHostnameForStorage() {
+    // Service Worker / background 无 window；content 脚本用当前站点 hostname
+    if (typeof globalThis !== 'undefined' && globalThis.location?.hostname) {
+        return globalThis.location.hostname;
+    }
+    return 'extension';
+}
+
+let _domainConfigStorage;
+function getDomainConfigStorage() {
+    if (!_domainConfigStorage) {
+        _domainConfigStorage = storage.defineItem(`local:${getHostnameForStorage()}`, {
+            fallback: DEFAULT_DOMAIN_CONFIG,
+        });
+    }
+    return _domainConfigStorage;
+}
+
 export const appState = {
-    //--------该网站独有的存储属性-------
-    domainConfigStorage : storage.defineItem(`local:${window.location.hostname}`, {
-        fallback: DEFAULT_DOMAIN_CONFIG //不存在则返回默认值
-    }),
+    //--------该网站独有的存储属性（按 hostname 分桶，background 用 extension）-------
+    get domainConfigStorage() {
+        return getDomainConfigStorage();
+    },
     domainConfig: {
         isPluginEnabled: false, //是否启用插件
     },
