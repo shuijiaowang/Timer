@@ -209,6 +209,34 @@ await browser.windows.create({
     left,
     top,
 });
+
+//相对于电脑屏幕。需要权限：system.display
+const displays = await browser.system.display.getInfo();
+
+const primary = displays.find(d => d.isPrimary) || displays[0];
+
+const width = 400;
+const height = 200;
+
+const left =
+    primary.workArea.width +
+    primary.workArea.left -
+    width;
+
+const top =
+    primary.workArea.height +
+    primary.workArea.top -
+    height;
+
+await browser.windows.create({
+    url: "/popup.html",
+    type: "popup",
+    width,
+    height,
+    left,
+    top,
+});
+
 ```
 ### popup与background长连接
 ```javascript
