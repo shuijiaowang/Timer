@@ -5,6 +5,7 @@ import {
     formatDurationParts,
     formatFireAt,
     formatRemaining,
+    msFromHMS,
     msFromMinSec,
     qqFarmDurationMs,
     statusLabel,
@@ -38,6 +39,7 @@ const schDate = ref('');
 
 // —— 倒计时新建 ——
 const cdTitle = ref('休息');
+const cdHr = ref(0);
 const cdMin = ref(15);
 const cdSec = ref(0);
 const cdFavorite = ref(false);
@@ -74,7 +76,7 @@ const countdownRunning = computed(() =>
         (t) =>
             t.type === 'countdown' &&
             t.role === 'instance' &&
-            (t.status === 'scheduled' || t.status === 'pending'),
+            (t.status === 'scheduled' || t.status === 'paused' || t.status === 'pending'),
     ),
 );
 const loopPresets = computed(() =>
@@ -172,7 +174,7 @@ async function createSchedule() {
 }
 
 async function createCountdownPreset() {
-    const durationMs = msFromMinSec(cdMin.value, cdSec.value);
+    const durationMs = msFromHMS(cdHr.value, cdMin.value, cdSec.value);
     if (durationMs <= 0) {
         error.value = '时长必须大于 0';
         return;
@@ -222,10 +224,6 @@ async function createQueuePreset() {
     );
 }
 
-async function addFromTemplate(templateId, overrides = {}) {
-    await run(() => timerApi.createFromTemplate({templateId, overrides}));
-}
-
 async function addQqFarm() {
     let bonus = farmSpeed.value;
     if (farmSpeed.value === 'custom') {
@@ -236,13 +234,23 @@ async function addQqFarm() {
         }
     }
     const durationMs = qqFarmDurationMs(farmBaseHours.value, bonus);
-    await addFromTemplate('qq_farm', {
-        title: `收菜 ${farmBaseHours.value}h`,
-        durationMs,
-    });
+    await run(() =>
+        timerApi.createFromTemplate({
+            templateId: 'qq_farm',
+            overrides: {
+                title: `收菜 ${farmBaseHours.value}h`,
+                durationMs,
+                startNow: true,
+            },
+        }),
+    );
+    tab.value = 'countdown';
 }
 
 function remainingFor(task) {
+    if (task.type === 'countdown' && task.status === 'paused' && task.remainingMs != null) {
+        return task.remainingMs;
+    }
     const due = taskDueAt(task);
     if (due == null) return null;
     return Math.max(0, due - now.value);
@@ -262,6 +270,7 @@ const editTime = ref('');
 const editRepeatDays = ref([]);
 const editUseDate = ref(false);
 const editDate = ref('');
+const editDurationHr = ref(0);
 const editDurationMin = ref(0);
 const editDurationSec = ref(0);
 const editFavorite = ref(false);
@@ -284,7 +293,8 @@ watch(editingTask, (task) => {
     }
     if (task.type === 'countdown' || task.type === 'loop') {
         const totalSec = Math.floor((task.durationMs ?? 0) / 1000);
-        editDurationMin.value = Math.floor(totalSec / 60);
+        editDurationHr.value = Math.floor(totalSec / 3600);
+        editDurationMin.value = Math.floor((totalSec % 3600) / 60);
         editDurationSec.value = totalSec % 60;
         editFavorite.value = Boolean(task.isFavorite);
     }
@@ -321,7 +331,11 @@ async function saveEdit() {
         }
     }
     if (task.type === 'countdown' || task.type === 'loop') {
-        patch.durationMs = msFromMinSec(editDurationMin.value, editDurationSec.value);
+        patch.durationMs = msFromHMS(
+            editDurationHr.value,
+            editDurationMin.value,
+            editDurationSec.value,
+        );
         if (patch.durationMs <= 0) {
             error.value = '时长必须大于 0';
             return;
@@ -426,7 +440,7 @@ onUnmounted(() => {
                 </label>
                 <label class="field">
                     <span>时间 HH:mm</span>
-                    <input v-model="schTime" type="text" placeholder="08:30" />
+                    <input v-model="schTime" type="text" placeholder="08:30 或 08：30" />
                 </label>
                 <label class="check">
                     <input v-model="schUseDate" type="checkbox" />
@@ -508,6 +522,23 @@ onUnmounted(() => {
                     <li v-for="inst in countdownRunning" :key="inst.id" class="item inst">
                         <strong>{{ inst.title }}</strong>
                         <span class="remain">{{ formatRemaining(remainingFor(inst)) }}</span>
+                        <span v-if="inst.status === 'paused'" class="tag">已暂停</span>
+                        <button
+                            v-if="inst.status === 'scheduled'"
+                            type="button"
+                            class="btn small"
+                            @click.stop="run(() => timerApi.pauseCountdown(inst.id))"
+                        >
+                            暂停
+                        </button>
+                        <button
+                            v-if="inst.status === 'paused'"
+                            type="button"
+                            class="btn small primary"
+                            @click.stop="run(() => timerApi.resumeCountdown(inst.id))"
+                        >
+                            继续
+                        </button>
                         <button
                             type="button"
                             class="btn small danger"
@@ -525,7 +556,11 @@ onUnmounted(() => {
                     <span>标题</span>
                     <input v-model="cdTitle" type="text" />
                 </label>
-                <div class="row2">
+                <div class="row3">
+                    <label class="field">
+                        <span>时</span>
+                        <input v-model.number="cdHr" type="number" min="0" />
+                    </label>
                     <label class="field">
                         <span>分</span>
                         <input v-model.number="cdMin" type="number" min="0" />
@@ -728,26 +763,6 @@ onUnmounted(() => {
         <!-- 模板 -->
         <section v-show="tab === 'template'" class="panel">
             <div class="card">
-                <h2>番茄闹钟</h2>
-                <p class="desc">工作 45 分钟，休息 15 分钟，可循环</p>
-                <button
-                    type="button"
-                    class="btn primary"
-                    @click="addFromTemplate('pomodoro', {startNow: false})"
-                >
-                    添加到我的任务
-                </button>
-            </div>
-
-            <div class="card">
-                <h2>喝水提醒</h2>
-                <p class="desc">每一小时提醒一次</p>
-                <button type="button" class="btn primary" @click="addFromTemplate('water_hourly')">
-                    添加到我的任务
-                </button>
-            </div>
-
-            <div class="card">
                 <h2>QQ 农场收菜</h2>
                 <p class="desc">按成熟时长与增益计算倒计时</p>
                 <div class="row2">
@@ -829,7 +844,11 @@ onUnmounted(() => {
                 </template>
 
                 <template v-if="editingTask.type === 'countdown' || editingTask.type === 'loop'">
-                    <div class="row2">
+                    <div class="row3">
+                        <label class="field">
+                            <span>时</span>
+                            <input v-model.number="editDurationHr" type="number" min="0" />
+                        </label>
                         <label class="field">
                             <span>分</span>
                             <input v-model.number="editDurationMin" type="number" min="0" />
@@ -985,12 +1004,14 @@ onUnmounted(() => {
     font: inherit;
 }
 
-.row2 {
+.row2,
+.row3 {
     display: flex;
     gap: 8px;
 }
 
-.row2 .field {
+.row2 .field,
+.row3 .field {
     flex: 1;
 }
 

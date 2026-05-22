@@ -2,10 +2,11 @@ import {TaskStatus} from './types.js';
 
 const STATUS_ORDER = {
     [TaskStatus.SCHEDULED]: 0,
-    [TaskStatus.PENDING]: 1,
-    [TaskStatus.IDLE]: 2,
-    [TaskStatus.COMPLETED]: 3,
-    [TaskStatus.CANCELLED]: 4,
+    [TaskStatus.PAUSED]: 1,
+    [TaskStatus.PENDING]: 2,
+    [TaskStatus.IDLE]: 3,
+    [TaskStatus.COMPLETED]: 4,
+    [TaskStatus.CANCELLED]: 5,
 };
 
 /**

@@ -390,6 +390,52 @@ export async function startCountdownTask(id) {
 }
 
 /** @param {string} id */
+export async function pauseCountdownTask(id) {
+    const task = await getTask(id);
+    if (!task || task.type !== TaskType.COUNTDOWN) {
+        throw new Error(`倒计时任务不存在: ${id}`);
+    }
+    if (task.status !== TaskStatus.SCHEDULED) {
+        throw new Error('只能暂停进行中的倒计时');
+    }
+    if (task.targetAt == null) {
+        throw new Error('倒计时未启动');
+    }
+    const remain = remainingMs(task.targetAt);
+    await clearAlarm(id);
+    return patchTask(id, {
+        status: TaskStatus.PAUSED,
+        remainingMs: remain,
+        targetAt: undefined,
+    });
+}
+
+/** @param {string} id */
+export async function resumeCountdownTask(id) {
+    const task = await getTask(id);
+    if (!task || task.type !== TaskType.COUNTDOWN) {
+        throw new Error(`倒计时任务不存在: ${id}`);
+    }
+    if (task.status !== TaskStatus.PAUSED) {
+        throw new Error('只能继续已暂停的倒计时');
+    }
+    const remain = task.remainingMs ?? task.durationMs;
+    if (remain <= 0) {
+        throw new Error('剩余时间无效');
+    }
+    const now = Date.now();
+    const targetAt = now + remain;
+    const updated = await patchTask(id, {
+        status: TaskStatus.SCHEDULED,
+        remainingMs: undefined,
+        targetAt,
+        startedAt: task.startedAt ?? now,
+    });
+    await scheduleAlarm(id, targetAt);
+    return updated;
+}
+
+/** @param {string} id */
 export async function startLoopTask(id) {
     const task = await getTask(id);
     if (!task || task.type !== TaskType.LOOP || task.role !== TaskRole.PRESET) {

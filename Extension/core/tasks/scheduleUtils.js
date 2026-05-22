@@ -1,14 +1,15 @@
 import {ALL_WEEKDAYS} from './types.js';
 
 /**
- * 解析 "HH:mm" 或 { hour, minute }
+ * 解析 "HH:mm"（支持中英文冒号 ：:）或 { hour, minute }
  * @param {string | { hour: number, minute: number }} input
  */
 export function parseTimeOfDay(input) {
     if (typeof input === 'object' && input !== null) {
         return {hour: input.hour, minute: input.minute};
     }
-    const match = String(input).trim().match(/^(\d{1,2}):(\d{2})$/);
+    const normalized = String(input).trim().replace(/：/g, ':');
+    const match = normalized.match(/^(\d{1,2}):(\d{2})$/);
     if (!match) {
         throw new Error(`无效时间格式，应为 HH:mm，收到: ${input}`);
     }

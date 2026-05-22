@@ -5,30 +5,6 @@ import {TaskType} from './types.js';
  * @type {Record<string, { id: string, title: string, description: string, type: import('./types.js').TaskType, build: () => object }>}
  */
 export const BUILTIN_TEMPLATES = {
-    pomodoro: {
-        id: 'pomodoro',
-        title: '番茄闹钟',
-        description: '工作 45 分钟，休息 15 分钟，可循环',
-        type: TaskType.QUEUE,
-        build: () => ({
-            title: '番茄闹钟',
-            steps: [
-                {title: '工作', durationMs: 45 * 60 * 1000},
-                {title: '休息', durationMs: 15 * 60 * 1000},
-            ],
-            repeat: true,
-        }),
-    },
-    water_hourly: {
-        id: 'water_hourly',
-        title: '喝水提醒',
-        description: '每一小时提醒一次',
-        type: TaskType.LOOP,
-        build: () => ({
-            title: '喝水提醒',
-            durationMs: 60 * 60 * 1000,
-        }),
-    },
     qq_farm: {
         id: 'qq_farm',
         title: 'QQ 农场收菜',

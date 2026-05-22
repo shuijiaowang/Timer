@@ -19,6 +19,8 @@ export const timerApi = {
     createFromTemplate: (payload) => callTimerTask('createFromTemplate', payload),
     spawnCountdown: (payload) => callTimerTask('spawnCountdown', payload),
     startCountdown: (id) => callTimerTask('startCountdown', {id}),
+    pauseCountdown: (id) => callTimerTask('pauseCountdown', {id}),
+    resumeCountdown: (id) => callTimerTask('resumeCountdown', {id}),
     startLoop: (id) => callTimerTask('startLoop', {id}),
     startQueue: (id) => callTimerTask('startQueue', {id}),
     restart: (id) => callTimerTask('restart', {id}),
@@ -45,11 +47,14 @@ export function taskDueAt(task) {
 
 export function formatDurationParts(durationMs) {
     const totalSec = Math.max(0, Math.floor(durationMs / 1000));
-    const m = Math.floor(totalSec / 60);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
     const s = totalSec % 60;
-    if (m > 0 && s > 0) return `${m} 分 ${s} 秒`;
-    if (m > 0) return `${m} 分钟`;
-    return `${s} 秒`;
+    const parts = [];
+    if (h > 0) parts.push(`${h} 小时`);
+    if (m > 0) parts.push(`${m} 分`);
+    if (s > 0 || parts.length === 0) parts.push(`${s} 秒`);
+    return parts.join(' ');
 }
 
 export function formatRemaining(ms) {
@@ -76,7 +81,15 @@ export function formatClock(nowMs = Date.now()) {
 }
 
 export function msFromMinSec(minutes, seconds) {
-    return (Number(minutes) || 0) * 60_000 + (Number(seconds) || 0) * 1000;
+    return msFromHMS(0, minutes, seconds);
+}
+
+export function msFromHMS(hours, minutes, seconds) {
+    return (
+        (Number(hours) || 0) * 3_600_000 +
+        (Number(minutes) || 0) * 60_000 +
+        (Number(seconds) || 0) * 1000
+    );
 }
 
 /** QQ 农场增益计算（与 templates.js 一致） */
@@ -99,6 +112,7 @@ export const statusLabel = {
     idle: '已保存',
     pending: '待启动',
     scheduled: '进行中',
+    paused: '已暂停',
     completed: '已完成',
     cancelled: '已取消',
 };

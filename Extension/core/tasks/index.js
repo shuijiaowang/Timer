@@ -6,6 +6,8 @@ export {
     createTaskFromTemplate,
     spawnCountdownInstance,
     startCountdownTask,
+    pauseCountdownTask,
+    resumeCountdownTask,
     startLoopTask,
     startQueueTask,
     restartTask,
