@@ -1,5 +1,6 @@
 import {
     cancelTask,
+    clearAllData,
     createCountdownTask,
     createLoopTask,
     createQueueTask,
@@ -21,6 +22,7 @@ import {
     startQueueTask,
     updateTask,
 } from '../core/tasks/index.js';
+import {getUserSettings, resetUserSettings, saveUserSettings} from '../core/userSettings.js';
 
 export default defineBackground(() => {
     console.log('Background script started', {id: browser.runtime.id});
@@ -31,10 +33,10 @@ export default defineBackground(() => {
         if (message.type === 'popup_opened') {
             console.log('popup 已打开');
             const currentWindow = await browser.windows.getCurrent();
-            const width = 500;
+            const width = 400;
             const height = 800;
             const left = 500;
-            const top = 500;
+            const top = 400;
             await browser.windows.create({
                 url: '/popup_true.html',
                 type: 'popup',
@@ -93,6 +95,14 @@ export default defineBackground(() => {
                         return {ok: true, templates: listBuiltinTemplates()};
                     case 'get':
                         return {ok: true, task: await getTaskSnapshot(payload.id)};
+                    case 'getSettings':
+                        return {ok: true, settings: await getUserSettings()};
+                    case 'saveSettings':
+                        return {ok: true, settings: await saveUserSettings(payload)};
+                    case 'clearAllData':
+                        await clearAllData();
+                        const resetSettings = await resetUserSettings();
+                        return {ok: true, settings: resetSettings};
                     default:
                         return {ok: false, error: `未知 action: ${action}`};
                 }

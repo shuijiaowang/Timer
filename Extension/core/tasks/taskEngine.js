@@ -1,10 +1,12 @@
 import {showReminderNotification} from '../reminderNotification.js';
+import {getUserSettings} from '../userSettings.js';
 import {
     clearAlarm,
     scheduleAlarm,
     scheduleTriggerAlarm,
     syncAlarmsForTasks,
     taskIdFromAlarmName,
+    clearAllAlarms,
 } from './alarmBridge.js';
 import {
     countdownTargetAt,
@@ -24,6 +26,7 @@ import {
     removeInstancesOfPreset,
     removeTask,
     upsertTask,
+    clearAllTasks,
 } from './taskStore.js';
 import {
     ALL_WEEKDAYS,
@@ -38,9 +41,12 @@ function createId() {
 }
 
 /** @param {import('./types.js').TimerTask} task */
-function notifyOptions(task) {
-    const blocking = task.reminderMode === ReminderMode.BLOCKING;
-    return {requireInteraction: blocking, silent: false};
+async function notifyOptions() {
+    const settings = await getUserSettings();
+    return {
+        requireInteraction: settings.notification.manualClose,
+        silent: !settings.notification.sound,
+    };
 }
 
 /** @param {Partial<import('./types.js').TimerTask>} extra */
@@ -739,7 +745,7 @@ export async function completeTask(taskId, options = {}) {
     }
 
     await clearAlarm(taskId);
-    const notify = notifyOptions(task);
+    const notify = await notifyOptions();
 
     if (task.type === TaskType.SCHEDULE) {
         const pad = (n) => String(n).padStart(2, '0');
@@ -928,3 +934,8 @@ export function seconds(n) {
 }
 
 export {remainingMs, parseTimeOfDay, nextFireAt, nextScheduleFireAt} from './scheduleUtils.js';
+
+export async function clearAllData() {
+    await clearAllAlarms();
+    await clearAllTasks();
+}

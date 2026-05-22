@@ -100,3 +100,7 @@ export function listActiveTasks(tasks) {
 export function listPresets(tasks) {
     return tasks.filter((t) => t.role === TaskRole.PRESET);
 }
+
+export async function clearAllTasks() {
+    await saveTasks([]);
+}

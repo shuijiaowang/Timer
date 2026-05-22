@@ -24,6 +24,7 @@ export {
     initTaskEngine,
     minutes,
     seconds,
+    clearAllData,
 } from './taskEngine.js';
 
 export {TaskType, TaskRole, TaskStatus, ReminderMode, ALL_WEEKDAYS} from './types.js';

@@ -32,6 +32,9 @@ export const timerApi = {
     list: (payload) => callTimerTask('list', payload),
     listTemplates: () => callTimerTask('listTemplates'),
     get: (id) => callTimerTask('get', {id}),
+    getSettings: () => callTimerTask('getSettings'),
+    saveSettings: (payload) => callTimerTask('saveSettings', payload),
+    clearAllData: () => callTimerTask('clearAllData'),
 };
 
 export function taskDueAt(task) {
@@ -99,13 +102,13 @@ export function qqFarmDurationMs(baseHours = 8, speedBonus = 0) {
 }
 
 export const WEEKDAY_LABELS = [
-    {value: 0, label: '日'},
     {value: 1, label: '一'},
     {value: 2, label: '二'},
     {value: 3, label: '三'},
     {value: 4, label: '四'},
     {value: 5, label: '五'},
     {value: 6, label: '六'},
+    {value: 0, label: '日'},
 ];
 
 export const statusLabel = {

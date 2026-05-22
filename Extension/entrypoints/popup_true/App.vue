@@ -1,5 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import SettingsPopover from '../../components/settings/SettingsPopover.vue';
+import {reminderModeFromSettings} from '../../core/userSettings.js';
 import {
     formatClock,
     formatDurationParts,
@@ -61,7 +63,43 @@ const farmBaseHours = ref(8);
 const farmSpeed = ref(0);
 const farmCustomSpeed = ref('');
 
+const userSettings = ref(null);
+const showSettings = ref(false);
 let tickTimer = null;
+
+function applyTheme(darkMode) {
+    const root = document.documentElement;
+    root.classList.remove('theme-light', 'theme-dark');
+    root.classList.add(darkMode ? 'theme-dark' : 'theme-light');
+}
+
+async function loadUserSettings() {
+    try {
+        const res = await timerApi.getSettings();
+        userSettings.value = res.settings;
+        applyTheme(Boolean(res.settings?.appearance?.darkMode));
+    } catch (e) {
+        error.value = e?.message ?? String(e);
+        applyTheme(true);
+    }
+}
+
+function defaultReminderMode() {
+    return userSettings.value
+        ? reminderModeFromSettings(userSettings.value)
+        : 'quick';
+}
+
+function onSettingsSaved(settings) {
+    userSettings.value = settings;
+    applyTheme(Boolean(settings?.appearance?.darkMode));
+}
+
+function onSettingsReset() {
+    showSettings.value = false;
+    loadUserSettings();
+    refresh();
+}
 
 const editingTask = computed(() => tasks.value.find((t) => t.id === editingId.value) ?? null);
 
@@ -161,6 +199,7 @@ async function createSchedule() {
         time: schTime.value.trim(),
         repeatDays: schUseDate.value ? [] : [...schRepeatDays.value],
         enabled: true,
+        reminderMode: defaultReminderMode(),
     };
     if (schUseDate.value) {
         const date = parseDateInput(schDate.value || todayStr.value);
@@ -184,6 +223,7 @@ async function createCountdownPreset() {
             title: cdTitle.value.trim() || '倒计时',
             durationMs,
             isFavorite: cdFavorite.value,
+            reminderMode: defaultReminderMode(),
         }),
     );
 }
@@ -198,6 +238,7 @@ async function createLoopPreset() {
         timerApi.createLoop({
             title: loopTitle.value.trim() || '循环提醒',
             durationMs,
+            reminderMode: defaultReminderMode(),
         }),
     );
 }
@@ -220,6 +261,7 @@ async function createQueuePreset() {
             title: queueTitle.value.trim() || '队列任务',
             steps,
             repeat: queueRepeat.value,
+            reminderMode: defaultReminderMode(),
         }),
     );
 }
@@ -241,6 +283,7 @@ async function addQqFarm() {
                 title: `收菜 ${farmBaseHours.value}h`,
                 durationMs,
                 startNow: true,
+                reminderMode: defaultReminderMode(),
             },
         }),
     );
@@ -391,6 +434,7 @@ function taskSummary(task) {
 onMounted(() => {
     schTime.value = defaultTime();
     schDate.value = todayStr.value;
+    loadUserSettings();
     refresh();
     loadTemplates();
     tickTimer = setInterval(() => {
@@ -406,10 +450,31 @@ onUnmounted(() => {
 <template>
     <div class="app">
         <header class="top">
-            <h1>Timer</h1>
-            <button type="button" class="btn ghost" :disabled="loading" @click="refresh">
-                {{ loading ? '…' : '刷新' }}
-            </button>
+            <div class="brand">
+                <span class="brand-icon" aria-hidden="true">⏱</span>
+                <h1>Timer</h1>
+            </div>
+            <div class="top-actions">
+                <button type="button" class="btn ghost" :disabled="loading" @click="refresh">
+                    {{ loading ? '…' : '刷新' }}
+                </button>
+                <div class="settings-anchor">
+                    <button
+                        type="button"
+                        class="btn ghost"
+                        :class="{active: showSettings}"
+                        @click="showSettings = !showSettings"
+                    >
+                        设置
+                    </button>
+                    <SettingsPopover
+                        v-if="showSettings"
+                        @saved="onSettingsSaved"
+                        @close="showSettings = false"
+                        @reset="onSettingsReset"
+                    />
+                </div>
+            </div>
         </header>
 
         <main class="app-body">
@@ -793,6 +858,7 @@ onUnmounted(() => {
                 <li v-for="tpl in templates" :key="tpl.id">{{ tpl.title }} — {{ tpl.description }}</li>
             </ul>
         </section>
+
         </main>
 
         <nav class="tabs tabs-bottom">
@@ -894,33 +960,76 @@ onUnmounted(() => {
     max-width: 400px;
     height: 100vh;
     margin: 0 auto;
-    padding: 10px 12px 0;
+    padding: 12px 14px 0;
     text-align: left;
     font-size: 14px;
+    color: var(--text);
 }
 
 .app-body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding-bottom: 58px;
+    padding-bottom: 64px;
 }
 
 .top {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.brand-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    background: var(--accent-soft);
+    font-size: 1rem;
+    line-height: 1;
 }
 
 .top h1 {
     margin: 0;
-    font-size: 1.15rem;
+    font-size: 1.12rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+.top-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.settings-anchor {
+    position: relative;
+}
+
+.top-actions .btn.active {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
 }
 
 .tabs {
     display: flex;
     gap: 4px;
+    padding: 4px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
 }
 
 .tabs-bottom {
@@ -932,101 +1041,125 @@ onUnmounted(() => {
     width: 100%;
     max-width: 400px;
     margin: 0;
-    padding: 8px 12px 10px;
-    border-top: 1px solid rgba(128, 128, 128, 0.25);
-    background: rgba(30, 30, 30, 0.92);
-    backdrop-filter: blur(8px);
-    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25);
+    padding: 10px 14px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-tab);
 }
 
 .tab {
     flex: 1;
-    padding: 6px 4px;
+    padding: 8px 4px;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     background: transparent;
-    color: inherit;
+    color: var(--text-muted);
     font-size: 0.8rem;
+    font-weight: 500;
     cursor: pointer;
-    opacity: 0.65;
+    transition: background 0.15s, color 0.15s;
+}
+
+.tab:hover:not(.active) {
+    color: var(--text);
+    background: var(--surface-hover);
 }
 
 .tab.active {
-    background: rgba(100, 108, 255, 0.2);
-    opacity: 1;
+    background: var(--accent-soft);
+    color: var(--accent);
     font-weight: 600;
 }
 
 .error {
-    margin: 0 0 8px;
-    padding: 8px;
-    border-radius: 6px;
-    background: #3d1f1f;
-    color: #ffb4b4;
+    margin: 0 0 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--danger-soft);
+    color: var(--danger-text);
     font-size: 0.82rem;
+    border: 1px solid rgba(220, 38, 38, 0.2);
 }
 
 .clock {
-    font-size: 2.2rem;
-    font-weight: 300;
-    letter-spacing: 0.05em;
+    font-size: 2.5rem;
+    font-weight: 200;
+    letter-spacing: 0.06em;
+    font-variant-numeric: tabular-nums;
     text-align: center;
-    margin: 4px 0;
+    margin: 8px 0 4px;
+    color: var(--text);
+    text-shadow: 0 0 40px var(--clock-glow);
 }
 
 .sub {
     text-align: center;
-    margin: 0 0 12px;
+    margin: 0 0 14px;
     font-size: 0.78rem;
-    opacity: 0.55;
+    color: var(--text-muted);
 }
 
 .card {
-    padding: 10px 12px;
-    margin-bottom: 10px;
-    border: 1px solid rgba(128, 128, 128, 0.2);
-    border-radius: 8px;
-    background: rgba(128, 128, 128, 0.06);
+    padding: 14px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-sm);
 }
 
 .card h2 {
-    margin: 0 0 8px;
-    font-size: 0.92rem;
+    margin: 0 0 10px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
 }
 
 .desc {
-    margin: 0 0 8px;
+    margin: 0 0 10px;
     font-size: 0.8rem;
-    opacity: 0.7;
+    color: var(--text-muted);
+    line-height: 1.45;
 }
 
 .hint {
     margin: 6px 0;
     font-size: 0.75rem;
-    opacity: 0.6;
+    color: var(--text-subtle);
 }
 
 .field {
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    margin-bottom: 8px;
+    gap: 4px;
+    margin-bottom: 10px;
     font-size: 0.78rem;
 }
 
 .field span {
-    opacity: 0.7;
+    color: var(--text-muted);
+    font-weight: 500;
 }
 
 .field input,
 .field select,
 .full {
-    padding: 6px 8px;
-    border: 1px solid rgba(128, 128, 128, 0.3);
-    border-radius: 6px;
-    background: rgba(0, 0, 0, 0.15);
-    color: inherit;
+    padding: 8px 10px;
+    border: 1px solid var(--input-border);
+    border-radius: 8px;
+    background: var(--input-bg);
+    color: var(--text);
     font: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.field input:focus,
+.field select:focus,
+.full:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .row2,
@@ -1049,9 +1182,10 @@ onUnmounted(() => {
 .check {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin-bottom: 8px;
+    gap: 8px;
+    margin-bottom: 10px;
     font-size: 0.85rem;
+    color: var(--text);
     cursor: pointer;
 }
 
@@ -1059,93 +1193,123 @@ onUnmounted(() => {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px;
-    margin-bottom: 10px;
+    gap: 6px;
+    margin-bottom: 12px;
 }
 
 .weekdays .lbl {
     font-size: 0.78rem;
-    opacity: 0.7;
-    margin-right: 4px;
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-right: 2px;
 }
 
 .wd {
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
     padding: 0;
-    border: 1px solid rgba(128, 128, 128, 0.35);
+    border: 1px solid var(--border-strong);
     border-radius: 50%;
     background: transparent;
-    color: inherit;
+    color: var(--text-muted);
     font-size: 0.75rem;
+    font-weight: 500;
     cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.wd:hover:not(.on) {
+    border-color: var(--accent);
+    color: var(--accent);
 }
 
 .wd.on {
-    background: #646cff;
-    border-color: #646cff;
-    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+    box-shadow: 0 2px 8px var(--accent-soft);
 }
 
 .seg {
     display: flex;
     gap: 6px;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
+    padding: 4px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
 }
 
 .seg-btn {
     flex: 1;
-    padding: 8px;
-    border: 1px solid rgba(128, 128, 128, 0.3);
-    border-radius: 6px;
+    padding: 9px;
+    border: none;
+    border-radius: 8px;
     background: transparent;
-    color: inherit;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 500;
     cursor: pointer;
+    transition: background 0.15s, color 0.15s;
 }
 
 .seg-btn.active {
-    background: rgba(100, 108, 255, 0.25);
-    border-color: #646cff;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
 }
 
 .step {
     margin-bottom: 8px;
-    padding: 8px;
-    border-radius: 6px;
-    background: rgba(0, 0, 0, 0.12);
+    padding: 10px;
+    border-radius: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
     font-size: 0.8rem;
 }
 
 .step input {
     width: 100%;
-    margin-top: 4px;
-    padding: 5px 6px;
-    border-radius: 4px;
-    border: 1px solid rgba(128, 128, 128, 0.3);
-    background: rgba(0, 0, 0, 0.1);
-    color: inherit;
+    margin-top: 6px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--input-border);
+    background: var(--input-bg);
+    color: var(--text);
 }
 
 .sec-title {
-    margin: 12px 0 6px;
-    font-size: 0.85rem;
-    opacity: 0.75;
+    margin: 14px 0 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
 }
 
 .list {
     list-style: none;
     margin: 0;
     padding: 0;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
 }
 
 .item {
-    padding: 10px 0;
-    border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
     cursor: pointer;
+    transition: background 0.12s;
+}
+
+.item:last-child {
+    border-bottom: none;
 }
 
 .item:hover {
-    background: rgba(100, 108, 255, 0.06);
+    background: var(--surface-hover);
 }
 
 .item.inst {
@@ -1158,18 +1322,19 @@ onUnmounted(() => {
 .row-main strong {
     display: block;
     font-size: 0.9rem;
+    font-weight: 600;
 }
 
 .fav {
     font-style: normal;
     font-size: 0.7rem;
-    color: #f0c040;
+    color: var(--warning);
     margin-left: 4px;
 }
 
 .meta {
     font-size: 0.78rem;
-    opacity: 0.65;
+    color: var(--text-muted);
 }
 
 .row-sub {
@@ -1180,20 +1345,23 @@ onUnmounted(() => {
 }
 
 .due {
-    color: #7dcea0;
+    color: var(--success);
 }
 
 .remain {
     flex: 1;
-    color: #7dcea0;
+    color: var(--success);
     font-variant-numeric: tabular-nums;
+    font-weight: 500;
 }
 
 .tag {
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: rgba(100, 108, 255, 0.2);
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    color: var(--accent);
     font-size: 0.72rem;
+    font-weight: 500;
 }
 
 .row-act {
@@ -1201,7 +1369,7 @@ onUnmounted(() => {
     flex-wrap: wrap;
     align-items: center;
     gap: 6px;
-    margin-top: 6px;
+    margin-top: 8px;
 }
 
 .sw {
@@ -1219,33 +1387,46 @@ onUnmounted(() => {
     opacity: 0.35;
     cursor: pointer;
     font-size: 1rem;
+    transition: opacity 0.15s, color 0.15s;
 }
 
 .pin.on {
     opacity: 1;
-    color: #f0c040;
+    color: var(--warning);
 }
 
 .empty {
-    padding: 16px 0;
+    padding: 20px 0;
     text-align: center;
-    opacity: 0.5;
+    color: var(--text-subtle);
     font-size: 0.85rem;
     cursor: default;
 }
 
 .running {
-    border-color: rgba(125, 206, 160, 0.4);
+    border-color: var(--success);
+    background: var(--success-soft);
 }
 
 .btn {
-    padding: 6px 12px;
-    border-radius: 6px;
-    border: 1px solid rgba(128, 128, 128, 0.35);
-    background: rgba(0, 0, 0, 0.2);
-    color: inherit;
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text);
     font-size: 0.85rem;
+    font-weight: 500;
     cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+
+.btn:active:not(:disabled) {
+    transform: scale(0.98);
 }
 
 .btn:disabled {
@@ -1254,36 +1435,54 @@ onUnmounted(() => {
 }
 
 .btn.primary {
-    background: #646cff;
-    border-color: #646cff;
-    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+}
+
+.btn.primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
 }
 
 .btn.ghost {
     background: transparent;
+    border-color: transparent;
     font-size: 0.8rem;
-    padding: 4px 10px;
+    padding: 6px 10px;
+    color: var(--text-muted);
+}
+
+.btn.ghost:hover:not(:disabled) {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: transparent;
 }
 
 .btn.small {
-    padding: 3px 8px;
+    padding: 4px 10px;
     font-size: 0.75rem;
 }
 
 .btn.danger {
-    color: #ffb4b4;
-    border-color: rgba(255, 120, 120, 0.4);
+    color: var(--danger-text);
+    border-color: rgba(220, 38, 38, 0.35);
+}
+
+.btn.danger:hover:not(:disabled) {
+    background: var(--danger-soft);
+    border-color: var(--danger);
 }
 
 .btn.block {
     width: 100%;
-    margin-top: 8px;
+    margin-top: 10px;
 }
 
 .edit-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.55);
+    background: var(--overlay);
     display: flex;
     align-items: flex-end;
     justify-content: center;
@@ -1295,54 +1494,30 @@ onUnmounted(() => {
     max-width: 400px;
     max-height: 85vh;
     overflow-y: auto;
-    padding: 14px;
-    border-radius: 12px 12px 0 0;
-    background: #1e1e1e;
-    border: 1px solid rgba(128, 128, 128, 0.3);
+    padding: 16px;
+    border-radius: 16px 16px 0 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    box-shadow: var(--shadow-md);
 }
 
 .edit-sheet header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
 }
 
 .edit-sheet h2 {
     margin: 0;
     font-size: 0.95rem;
+    font-weight: 600;
 }
 
 .tpl-meta {
     margin-top: 12px;
     padding-left: 18px;
     font-size: 0.75rem;
-    opacity: 0.5;
-}
-
-@media (prefers-color-scheme: light) {
-    .error {
-        background: #ffe8e8;
-        color: #a02020;
-    }
-
-    .field input,
-    .field select,
-    .full {
-        background: #fff;
-    }
-
-    .tabs-bottom {
-        background: rgba(255, 255, 255, 0.94);
-        box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
-    }
-
-    .edit-sheet {
-        background: #fafafa;
-    }
-
-    .step {
-        background: rgba(0, 0, 0, 0.04);
-    }
+    color: var(--text-subtle);
 }
 </style>

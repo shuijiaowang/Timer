@@ -69,3 +69,12 @@ export async function syncAlarmsForTasks(tasks) {
         }
     }
 }
+
+export async function clearAllAlarms() {
+    const all = await browser.alarms.getAll();
+    for (const alarm of all) {
+        if (alarm.name?.startsWith(ALARM_PREFIX)) {
+            await browser.alarms.clear(alarm.name);
+        }
+    }
+}

@@ -1,14 +1,77 @@
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* —— Light theme —— */
+html.theme-light {
+  color-scheme: light;
+  --bg: #f0f2f8;
+  --bg-elevated: #ffffff;
+  --text: #1a1d26;
+  --text-muted: rgba(26, 29, 38, 0.58);
+  --text-subtle: rgba(26, 29, 38, 0.42);
+  --border: rgba(26, 29, 38, 0.1);
+  --border-strong: rgba(26, 29, 38, 0.18);
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-hover: rgba(99, 102, 241, 0.06);
+  --input-bg: #ffffff;
+  --input-border: rgba(26, 29, 38, 0.14);
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-soft: rgba(99, 102, 241, 0.14);
+  --accent-text: #ffffff;
+  --success: #059669;
+  --success-soft: rgba(5, 150, 105, 0.12);
+  --warning: #d97706;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --danger-text: #b91c1c;
+  --shadow-sm: 0 1px 3px rgba(26, 29, 38, 0.06);
+  --shadow-md: 0 8px 24px rgba(26, 29, 38, 0.1);
+  --shadow-tab: 0 -4px 20px rgba(26, 29, 38, 0.06);
+  --overlay: rgba(15, 17, 24, 0.4);
+  --clock-glow: rgba(99, 102, 241, 0.15);
+  --toggle-off: #cbd5e1;
+  --toggle-on: var(--accent);
+}
+
+/* —— Dark theme —— */
+html.theme-dark {
+  color-scheme: dark;
+  --bg: #12131a;
+  --bg-elevated: #1c1d28;
+  --text: rgba(248, 250, 252, 0.92);
+  --text-muted: rgba(248, 250, 252, 0.55);
+  --text-subtle: rgba(248, 250, 252, 0.38);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --surface: rgba(28, 29, 40, 0.88);
+  --surface-hover: rgba(129, 140, 248, 0.1);
+  --input-bg: rgba(0, 0, 0, 0.25);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --accent: #818cf8;
+  --accent-hover: #a5b4fc;
+  --accent-soft: rgba(129, 140, 248, 0.2);
+  --accent-text: #0f1118;
+  --success: #6ee7b7;
+  --success-soft: rgba(110, 231, 183, 0.12);
+  --warning: #fbbf24;
+  --danger: #fca5a5;
+  --danger-soft: rgba(127, 29, 29, 0.45);
+  --danger-text: #fecaca;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-tab: 0 -4px 20px rgba(0, 0, 0, 0.35);
+  --overlay: rgba(0, 0, 0, 0.6);
+  --clock-glow: rgba(129, 140, 248, 0.12);
+  --toggle-off: #3f4456;
+  --toggle-on: var(--accent);
 }
 
 * {
@@ -32,16 +95,12 @@ body {
 
 body {
   min-width: 360px;
+  color: var(--text);
+  background: var(--bg);
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 #app {
   width: 100%;
   height: 100%;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
 }
