@@ -1,70 +1,299 @@
 import {showReminderNotification} from '../reminderNotification.js';
-import {clearAlarm, scheduleAlarm, syncAlarmsForTasks, taskIdFromAlarmName} from './alarmBridge.js';
-import {countdownTargetAt, nextFireAt, parseTimeOfDay, remainingMs} from './scheduleUtils.js';
-import {getTask, listActiveTasks, loadTasks, patchTask, removeTask, upsertTask} from './taskStore.js';
-import {TaskStatus, TaskType} from './types.js';
+import {
+    clearAlarm,
+    scheduleAlarm,
+    scheduleTriggerAlarm,
+    syncAlarmsForTasks,
+    taskIdFromAlarmName,
+} from './alarmBridge.js';
+import {
+    countdownTargetAt,
+    nextScheduleFireAt,
+    normalizeRepeatDays,
+    parseCalendarDate,
+    parseTimeOfDay,
+    remainingMs,
+} from './scheduleUtils.js';
+import {BUILTIN_TEMPLATES, getTemplateBuildPayload, listBuiltinTemplates} from './templates.js';
+import {
+    getTask,
+    listActiveTasks,
+    listTasksFiltered,
+    loadTasks,
+    patchTask,
+    removeInstancesOfPreset,
+    removeTask,
+    upsertTask,
+} from './taskStore.js';
+import {
+    ALL_WEEKDAYS,
+    ReminderMode,
+    TaskRole,
+    TaskStatus,
+    TaskType,
+} from './types.js';
 
 function createId() {
     return globalThis.crypto?.randomUUID?.() ?? `task-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/** @param {import('./types.js').TimerTask} task */
+function notifyOptions(task) {
+    const blocking = task.reminderMode === ReminderMode.BLOCKING;
+    return {requireInteraction: blocking, silent: false};
+}
+
+/** @param {Partial<import('./types.js').TimerTask>} extra */
+function baseFields(extra = {}) {
+    const now = Date.now();
+    return {
+        enabled: true,
+        pinned: false,
+        reminderMode: ReminderMode.QUICK,
+        createdAt: now,
+        updatedAt: now,
+        ...extra,
+    };
+}
+
 /**
- * 定时任务：在下一个 HH:mm 提醒一次
- * @param {{ title?: string, time: string | { hour: number, minute: number } }} options
+ * @param {import('./types.js').ScheduleTask} task
  */
-export async function createScheduleTask({title = '定时提醒', time}) {
+async function applyScheduleTiming(task) {
+    if (!task.enabled) {
+        await clearAlarm(task.id);
+        return patchTask(task.id, {
+            status: TaskStatus.IDLE,
+            fireAtMs: null,
+        });
+    }
+
+    const fireAtMs = nextScheduleFireAt({
+        hour: task.hour,
+        minute: task.minute,
+        repeatDays: task.repeatDays,
+        date: task.date,
+    });
+
+    if (fireAtMs == null) {
+        await clearAlarm(task.id);
+        return patchTask(task.id, {
+            status: TaskStatus.IDLE,
+            fireAtMs: null,
+        });
+    }
+
+    await scheduleAlarm(task.id, fireAtMs);
+    return patchTask(task.id, {
+        status: TaskStatus.SCHEDULED,
+        fireAtMs,
+    });
+}
+
+/**
+ * @param {import('./types.js').TimerTask} task
+ */
+async function applyTriggerAlarm(task) {
+    if (
+        task.triggerAtMs &&
+        task.triggerAtMs > Date.now() &&
+        task.enabled &&
+        (task.status === TaskStatus.IDLE || task.status === TaskStatus.PENDING)
+    ) {
+        await scheduleTriggerAlarm(task.id, task.triggerAtMs);
+        return patchTask(task.id, {status: TaskStatus.PENDING});
+    }
+    await clearAlarm(task.id);
+    return task;
+}
+
+/**
+ * 定时任务预设
+ * @param {{
+ *   title?: string,
+ *   time: string | { hour: number, minute: number },
+ *   repeatDays?: number[],
+ *   date?: { year: number, month: number, day: number } | null,
+ *   enabled?: boolean,
+ *   pinned?: boolean,
+ *   reminderMode?: import('./types.js').ReminderMode,
+ * }} options
+ */
+export async function createScheduleTask({
+    title = '定时提醒',
+    time,
+    repeatDays = ALL_WEEKDAYS,
+    date = null,
+    enabled = true,
+    pinned = false,
+    reminderMode = ReminderMode.QUICK,
+}) {
     const {hour, minute} = parseTimeOfDay(time);
-    const fireAtMs = nextFireAt(hour, minute);
+    const parsedDate = date ? parseCalendarDate(date) : null;
     /** @type {import('./types.js').ScheduleTask} */
     const task = {
         id: createId(),
         type: TaskType.SCHEDULE,
+        role: TaskRole.PRESET,
         title,
         hour,
         minute,
-        status: TaskStatus.SCHEDULED,
-        fireAtMs,
-        createdAt: Date.now(),
+        repeatDays: normalizeRepeatDays(repeatDays),
+        date: parsedDate,
+        status: TaskStatus.IDLE,
+        fireAtMs: null,
+        lastFiredAtMs: null,
+        ...baseFields({enabled, pinned, reminderMode}),
     };
+
     await upsertTask(task);
-    await scheduleAlarm(task.id, fireAtMs);
+    if (enabled) {
+        return applyScheduleTiming(task);
+    }
     return task;
 }
 
 /**
- * 倒计时任务：从创建时刻起按墙钟计时，关闭浏览器后仍继续
- * @param {{ title?: string, durationMs: number, startNow?: boolean }} options durationMs 毫秒
+ * 倒计时预设（默认 idle；startNow 会额外创建并启动一个实例）
+ * @param {{
+ *   title?: string,
+ *   durationMs: number,
+ *   startNow?: boolean,
+ *   isFavorite?: boolean,
+ *   enabled?: boolean,
+ *   pinned?: boolean,
+ *   triggerAtMs?: number | null,
+ *   reminderMode?: import('./types.js').ReminderMode,
+ *   sourceTemplateId?: string,
+ * }} options
  */
-export async function createCountdownTask({title = '倒计时', durationMs, startNow = true}) {
+export async function createCountdownTask({
+    title = '倒计时',
+    durationMs,
+    startNow = false,
+    isFavorite = false,
+    enabled = true,
+    pinned = false,
+    triggerAtMs = null,
+    reminderMode = ReminderMode.QUICK,
+    sourceTemplateId,
+}) {
     if (!durationMs || durationMs <= 0) {
         throw new Error('durationMs 必须大于 0');
     }
-    const now = Date.now();
     /** @type {import('./types.js').CountdownTask} */
     const task = {
         id: createId(),
         type: TaskType.COUNTDOWN,
+        role: TaskRole.PRESET,
         title,
         durationMs,
-        status: startNow ? TaskStatus.SCHEDULED : TaskStatus.PENDING,
-        createdAt: now,
+        isFavorite,
+        status: TaskStatus.IDLE,
+        triggerAtMs: triggerAtMs ?? null,
+        ...baseFields({enabled, pinned, reminderMode, sourceTemplateId}),
     };
+    await upsertTask(task);
+    if (triggerAtMs && triggerAtMs > Date.now() && enabled) {
+        await applyTriggerAlarm(task);
+    }
     if (startNow) {
-        task.startedAt = now;
-        task.targetAt = countdownTargetAt(durationMs, now);
-        await upsertTask(task);
-        await scheduleAlarm(task.id, task.targetAt);
-    } else {
-        await upsertTask(task);
+        return spawnCountdownInstance(task.id, {startImmediately: true});
     }
     return task;
 }
 
 /**
- * 队列任务：按顺序执行多段倒计时，上一段结束后自动开始下一段
- * @param {{ title?: string, steps: { title?: string, durationMs: number }[], startNow?: boolean }} options
+ * @param {import('./types.js').CountdownTask} preset
+ * @param {{ startImmediately?: boolean }} [options]
  */
-export async function createQueueTask({title = '队列任务', steps, startNow = true}) {
+export async function spawnCountdownInstance(presetId, options = {}) {
+    const preset = await getTask(presetId);
+    if (!preset || preset.type !== TaskType.COUNTDOWN || preset.role !== TaskRole.PRESET) {
+        throw new Error(`倒计时预设不存在: ${presetId}`);
+    }
+    if (!preset.enabled) {
+        throw new Error('该倒计时已禁用');
+    }
+    const now = Date.now();
+    /** @type {import('./types.js').CountdownTask} */
+    const instance = {
+        id: createId(),
+        type: TaskType.COUNTDOWN,
+        role: TaskRole.INSTANCE,
+        presetId: preset.id,
+        title: preset.title,
+        durationMs: preset.durationMs,
+        status: options.startImmediately ? TaskStatus.SCHEDULED : TaskStatus.PENDING,
+        ...baseFields({
+            enabled: true,
+            pinned: false,
+            reminderMode: preset.reminderMode,
+        }),
+    };
+    if (options.startImmediately) {
+        instance.startedAt = now;
+        instance.targetAt = countdownTargetAt(preset.durationMs, now);
+    }
+    await upsertTask(instance);
+    if (options.startImmediately && instance.targetAt) {
+        await scheduleAlarm(instance.id, instance.targetAt);
+    }
+    return instance;
+}
+
+/**
+ * 循环任务预设
+ */
+export async function createLoopTask({
+    title = '循环提醒',
+    durationMs,
+    startNow = false,
+    enabled = true,
+    pinned = false,
+    triggerAtMs = null,
+    reminderMode = ReminderMode.QUICK,
+    sourceTemplateId,
+}) {
+    if (!durationMs || durationMs <= 0) {
+        throw new Error('durationMs 必须大于 0');
+    }
+    /** @type {import('./types.js').LoopTask} */
+    const task = {
+        id: createId(),
+        type: TaskType.LOOP,
+        role: TaskRole.PRESET,
+        title,
+        durationMs,
+        cycleCount: 0,
+        status: TaskStatus.IDLE,
+        triggerAtMs: triggerAtMs ?? null,
+        ...baseFields({enabled, pinned, reminderMode, sourceTemplateId}),
+    };
+    await upsertTask(task);
+    if (triggerAtMs && triggerAtMs > Date.now() && enabled) {
+        await applyTriggerAlarm(task);
+    }
+    if (startNow) {
+        return startLoopTask(task.id);
+    }
+    return task;
+}
+
+/**
+ * 队列任务预设
+ */
+export async function createQueueTask({
+    title = '队列任务',
+    steps,
+    repeat = false,
+    startNow = false,
+    enabled = true,
+    pinned = false,
+    triggerAtMs = null,
+    reminderMode = ReminderMode.QUICK,
+    sourceTemplateId,
+}) {
     if (!steps?.length) {
         throw new Error('steps 不能为空');
     }
@@ -77,68 +306,276 @@ export async function createQueueTask({title = '队列任务', steps, startNow =
             durationMs: step.durationMs,
         };
     });
-    const now = Date.now();
     /** @type {import('./types.js').QueueTask} */
     const task = {
         id: createId(),
         type: TaskType.QUEUE,
+        role: TaskRole.PRESET,
         title,
         steps: normalized,
+        repeat: Boolean(repeat),
         currentStepIndex: 0,
-        status: startNow ? TaskStatus.SCHEDULED : TaskStatus.PENDING,
-        createdAt: now,
+        cycleCount: 0,
+        status: TaskStatus.IDLE,
+        triggerAtMs: triggerAtMs ?? null,
+        ...baseFields({enabled, pinned, reminderMode, sourceTemplateId}),
     };
+    await upsertTask(task);
+    if (triggerAtMs && triggerAtMs > Date.now() && enabled) {
+        await applyTriggerAlarm(task);
+    }
     if (startNow) {
-        task.startedAt = now;
-        task.targetAt = countdownTargetAt(normalized[0].durationMs, now);
-        await upsertTask(task);
-        await scheduleAlarm(task.id, task.targetAt);
-    } else {
-        await upsertTask(task);
+        return startQueueTask(task.id);
     }
     return task;
 }
 
-/** 启动尚未开始的队列任务（从第一步开始） */
-export async function startQueueTask(id) {
-    const task = await getTask(id);
-    if (!task || task.type !== TaskType.QUEUE) {
-        throw new Error(`队列任务不存在: ${id}`);
+/** 从内置模板创建 preset */
+export async function createTaskFromTemplate(templateId, overrides = {}) {
+    const tpl = BUILTIN_TEMPLATES[templateId];
+    if (!tpl) {
+        throw new Error(`未知模板: ${templateId}`);
     }
-    if (task.status === TaskStatus.COMPLETED || task.status === TaskStatus.CANCELLED) {
-        throw new Error(`任务已结束: ${task.status}`);
+    const payload = getTemplateBuildPayload(templateId, overrides);
+    const common = {
+        title: payload.title,
+        enabled: overrides.enabled ?? true,
+        pinned: overrides.pinned ?? false,
+        startNow: overrides.startNow ?? false,
+        triggerAtMs: overrides.triggerAtMs ?? null,
+        reminderMode: overrides.reminderMode ?? ReminderMode.QUICK,
+        sourceTemplateId: templateId,
+    };
+
+    if (tpl.type === TaskType.QUEUE) {
+        return createQueueTask({
+            ...common,
+            steps: payload.steps,
+            repeat: payload.repeat ?? false,
+        });
     }
-    const now = Date.now();
-    const step = task.steps[task.currentStepIndex];
-    const targetAt = countdownTargetAt(step.durationMs, now);
-    const updated = await patchTask(id, {
-        status: TaskStatus.SCHEDULED,
-        startedAt: task.startedAt ?? now,
-        targetAt,
+    if (tpl.type === TaskType.LOOP) {
+        return createLoopTask({
+            ...common,
+            durationMs: payload.durationMs,
+        });
+    }
+    return createCountdownTask({
+        ...common,
+        durationMs: payload.durationMs,
     });
-    await scheduleAlarm(id, targetAt);
-    return updated;
 }
 
-/** 启动尚未开始的倒计时 */
+/** @param {string} id */
 export async function startCountdownTask(id) {
     const task = await getTask(id);
     if (!task || task.type !== TaskType.COUNTDOWN) {
         throw new Error(`倒计时任务不存在: ${id}`);
     }
+    if (task.role === TaskRole.PRESET) {
+        return spawnCountdownInstance(id, {startImmediately: true});
+    }
     if (task.status === TaskStatus.COMPLETED || task.status === TaskStatus.CANCELLED) {
         throw new Error(`任务已结束: ${task.status}`);
     }
     const now = Date.now();
-    const startedAt = now;
-    const targetAt = countdownTargetAt(task.durationMs, startedAt);
+    const targetAt = countdownTargetAt(task.durationMs, now);
     const updated = await patchTask(id, {
         status: TaskStatus.SCHEDULED,
-        startedAt,
+        startedAt: now,
         targetAt,
     });
     await scheduleAlarm(id, targetAt);
     return updated;
+}
+
+/** @param {string} id */
+export async function startLoopTask(id) {
+    const task = await getTask(id);
+    if (!task || task.type !== TaskType.LOOP || task.role !== TaskRole.PRESET) {
+        throw new Error(`循环任务不存在: ${id}`);
+    }
+    if (!task.enabled) throw new Error('该循环任务已禁用');
+    if (task.status === TaskStatus.CANCELLED) {
+        throw new Error(`任务已结束: ${task.status}`);
+    }
+    const now = Date.now();
+    const targetAt = countdownTargetAt(task.durationMs, now);
+    const updated = await patchTask(id, {
+        status: TaskStatus.SCHEDULED,
+        startedAt: task.startedAt ?? now,
+        targetAt,
+        cycleCount: task.cycleCount ?? 0,
+    });
+    await scheduleAlarm(id, targetAt);
+    return updated;
+}
+
+/** @param {string} id */
+export async function startQueueTask(id) {
+    const task = await getTask(id);
+    if (!task || task.type !== TaskType.QUEUE || task.role !== TaskRole.PRESET) {
+        throw new Error(`队列任务不存在: ${id}`);
+    }
+    if (!task.enabled) throw new Error('该队列任务已禁用');
+    if (task.status === TaskStatus.CANCELLED) {
+        throw new Error(`任务已结束: ${task.status}`);
+    }
+    const now = Date.now();
+    const step = task.steps[task.currentStepIndex ?? 0];
+    const targetAt = countdownTargetAt(step.durationMs, now);
+    const updated = await patchTask(id, {
+        status: TaskStatus.SCHEDULED,
+        startedAt: task.startedAt ?? now,
+        targetAt,
+        currentStepIndex: task.currentStepIndex ?? 0,
+    });
+    await scheduleAlarm(id, targetAt);
+    return updated;
+}
+
+/**
+ * 复用预设重新启动（队列/循环重置；倒计时新建实例）
+ * @param {string} id preset id
+ */
+export async function restartTask(id) {
+    const task = await getTask(id);
+    if (!task) throw new Error(`任务不存在: ${id}`);
+
+    await cancelTask(id);
+
+    if (task.type === TaskType.COUNTDOWN && task.role === TaskRole.PRESET) {
+        return spawnCountdownInstance(id, {startImmediately: true});
+    }
+    if (task.type === TaskType.LOOP) {
+        await patchTask(id, {cycleCount: 0, startedAt: undefined, targetAt: undefined});
+        return startLoopTask(id);
+    }
+    if (task.type === TaskType.QUEUE) {
+        await patchTask(id, {
+            currentStepIndex: 0,
+            cycleCount: 0,
+            startedAt: undefined,
+            targetAt: undefined,
+        });
+        return startQueueTask(id);
+    }
+    if (task.type === TaskType.SCHEDULE) {
+        return applyScheduleTiming(/** @type {import('./types.js').ScheduleTask} */ (task));
+    }
+    throw new Error('该任务类型不支持 restart');
+}
+
+/**
+ * @param {string} id
+ * @param {object} patch
+ */
+export async function updateTask(id, patch) {
+    const task = await getTask(id);
+    if (!task) throw new Error(`任务不存在: ${id}`);
+
+    /** @type {Record<string, unknown>} */
+    const next = {updatedAt: Date.now()};
+
+    if (patch.title != null) next.title = String(patch.title).trim() || task.title;
+    if (patch.enabled != null) next.enabled = Boolean(patch.enabled);
+    if (patch.pinned != null) next.pinned = Boolean(patch.pinned);
+    if (patch.reminderMode != null) next.reminderMode = patch.reminderMode;
+    if (patch.isFavorite != null) next.isFavorite = Boolean(patch.isFavorite);
+    if (patch.triggerAtMs !== undefined) next.triggerAtMs = patch.triggerAtMs;
+
+    if (task.type === TaskType.SCHEDULE && task.role === TaskRole.PRESET) {
+        if (patch.time != null) {
+            const {hour, minute} = parseTimeOfDay(patch.time);
+            next.hour = hour;
+            next.minute = minute;
+        }
+        if (patch.hour != null) next.hour = patch.hour;
+        if (patch.minute != null) next.minute = patch.minute;
+        if (patch.repeatDays != null) {
+            next.repeatDays = normalizeRepeatDays(patch.repeatDays);
+        }
+        if (patch.date !== undefined) {
+            next.date = patch.date ? parseCalendarDate(patch.date) : null;
+        }
+    }
+
+    if (task.type === TaskType.COUNTDOWN && patch.durationMs != null) {
+        if (patch.durationMs <= 0) throw new Error('durationMs 必须大于 0');
+        next.durationMs = patch.durationMs;
+    }
+
+    if (task.type === TaskType.LOOP && patch.durationMs != null) {
+        if (patch.durationMs <= 0) throw new Error('durationMs 必须大于 0');
+        next.durationMs = patch.durationMs;
+    }
+
+    if (task.type === TaskType.QUEUE) {
+        if (patch.repeat != null) next.repeat = Boolean(patch.repeat);
+        if (patch.steps != null) {
+            if (!patch.steps.length) throw new Error('steps 不能为空');
+            next.steps = patch.steps.map((step, i) => {
+                if (!step.durationMs || step.durationMs <= 0) {
+                    throw new Error(`第 ${i + 1} 步 durationMs 必须大于 0`);
+                }
+                return {
+                    title: step.title?.trim() || `步骤 ${i + 1}`,
+                    durationMs: step.durationMs,
+                };
+            });
+        }
+    }
+
+    const updated = await patchTask(id, next);
+
+    if (patch.enabled === false && updated.status === TaskStatus.SCHEDULED) {
+        await clearAlarm(id);
+        if (updated.type !== TaskType.SCHEDULE) {
+            return patchTask(id, {
+                status: TaskStatus.IDLE,
+                startedAt: undefined,
+                targetAt: undefined,
+                currentStepIndex: 0,
+            });
+        }
+    }
+
+    if (task.type === TaskType.SCHEDULE) {
+        return applyScheduleTiming(/** @type {import('./types.js').ScheduleTask} */ (updated));
+    }
+
+    if (
+        updated.triggerAtMs &&
+        updated.triggerAtMs > Date.now() &&
+        updated.enabled &&
+        (updated.status === TaskStatus.IDLE || updated.status === TaskStatus.PENDING)
+    ) {
+        return applyTriggerAlarm(updated);
+    }
+
+    return updated;
+}
+
+/** @param {string} id @param {boolean} enabled */
+export async function setTaskEnabled(id, enabled) {
+    return updateTask(id, {enabled});
+}
+
+/** @param {string} id @param {boolean} pinned */
+export async function setTaskPinned(id, pinned) {
+    return updateTask(id, {pinned});
+}
+
+/** @param {string} id */
+export async function deleteTask(id) {
+    const task = await getTask(id);
+    if (!task) return null;
+    await clearAlarm(id);
+    if (task.role === TaskRole.PRESET) {
+        await removeInstancesOfPreset(id);
+    }
+    await removeTask(id);
+    return task;
 }
 
 /** @param {string} id */
@@ -146,11 +583,42 @@ export async function cancelTask(id) {
     const task = await getTask(id);
     if (!task) return null;
     await clearAlarm(id);
+
+    if (task.role === TaskRole.INSTANCE) {
+        return patchTask(id, {status: TaskStatus.CANCELLED});
+    }
+
+    if (task.type === TaskType.SCHEDULE) {
+        return patchTask(id, {
+            status: TaskStatus.IDLE,
+            fireAtMs: null,
+        });
+    }
+
+    if (
+        task.type === TaskType.COUNTDOWN ||
+        task.type === TaskType.LOOP ||
+        task.type === TaskType.QUEUE
+    ) {
+        return patchTask(id, {
+            status: TaskStatus.IDLE,
+            startedAt: undefined,
+            targetAt: undefined,
+            currentStepIndex: 0,
+        });
+    }
+
     return patchTask(id, {status: TaskStatus.CANCELLED});
 }
 
-export async function listTasks() {
-    return loadTasks();
+/**
+ * @param {object} [options]
+ * @param {import('./types.js').TaskType} [options.type]
+ * @param {import('./types.js').TaskRole} [options.role]
+ * @param {import('./types.js').TaskStatus} [options.status]
+ */
+export async function listTasks(options = {}) {
+    return listTasksFiltered(options);
 }
 
 /** @param {string} id */
@@ -158,9 +626,25 @@ export function getTaskSnapshot(id) {
     return getTask(id);
 }
 
-/**
- * 恢复：处理已过期但未触发的任务（alarms 未响或扩展刚安装）
- */
+/** 定时引爆 alarm 到时自动启动 */
+export async function activateTriggeredTask(taskId) {
+    const task = await getTask(taskId);
+    if (!task || !task.enabled) return null;
+
+    await patchTask(taskId, {triggerAtMs: null});
+
+    if (task.type === TaskType.COUNTDOWN && task.role === TaskRole.PRESET) {
+        return spawnCountdownInstance(taskId, {startImmediately: true});
+    }
+    if (task.type === TaskType.LOOP) {
+        return startLoopTask(taskId);
+    }
+    if (task.type === TaskType.QUEUE) {
+        return startQueueTask(taskId);
+    }
+    return null;
+}
+
 export async function reconcileTasksOnStartup() {
     const tasks = await loadTasks();
     const now = Date.now();
@@ -171,14 +655,20 @@ export async function reconcileTasksOnStartup() {
 
         let dueAt = null;
         if (task.type === TaskType.SCHEDULE) dueAt = task.fireAtMs;
-        if (task.type === TaskType.COUNTDOWN || task.type === TaskType.QUEUE) dueAt = task.targetAt;
+        if (
+            task.type === TaskType.COUNTDOWN ||
+            task.type === TaskType.QUEUE ||
+            task.type === TaskType.LOOP
+        ) {
+            dueAt = task.targetAt;
+        }
 
         while (dueAt != null && dueAt <= now) {
             await completeTask(task.id, {fromReconcile: true});
             changed = true;
             const fresh = await getTask(task.id);
             if (!fresh || fresh.status !== TaskStatus.SCHEDULED) break;
-            if (fresh.type === TaskType.QUEUE) {
+            if (fresh.type === TaskType.QUEUE || fresh.type === TaskType.LOOP) {
                 dueAt = fresh.targetAt;
             } else {
                 break;
@@ -203,6 +693,46 @@ export async function completeTask(taskId, options = {}) {
     }
 
     await clearAlarm(taskId);
+    const notify = notifyOptions(task);
+
+    if (task.type === TaskType.SCHEDULE) {
+        const pad = (n) => String(n).padStart(2, '0');
+        showReminderNotification(
+            {
+                title: task.title,
+                message: options.fromReconcile
+                    ? `定时 ${pad(task.hour)}:${pad(task.minute)} 已到（恢复时补发）`
+                    : `定时 ${pad(task.hour)}:${pad(task.minute)} 已到`,
+            },
+            notify,
+        );
+
+        const now = Date.now();
+        const isOneShot = Boolean(task.date);
+        const next = isOneShot
+            ? null
+            : nextScheduleFireAt({
+                  hour: task.hour,
+                  minute: task.minute,
+                  repeatDays: task.repeatDays,
+                  date: null,
+              });
+
+        if (next != null && task.enabled) {
+            await scheduleAlarm(taskId, next);
+            return patchTask(taskId, {
+                status: TaskStatus.SCHEDULED,
+                fireAtMs: next,
+                lastFiredAtMs: now,
+            });
+        }
+
+        return patchTask(taskId, {
+            status: TaskStatus.IDLE,
+            fireAtMs: null,
+            lastFiredAtMs: now,
+        });
+    }
 
     if (task.type === TaskType.QUEUE) {
         const step = task.steps[task.currentStepIndex];
@@ -215,7 +745,7 @@ export async function completeTask(taskId, options = {}) {
         if (nextIndex < task.steps.length) {
             showReminderNotification(
                 {title: task.title, message: stepMessage},
-                {requireInteraction: false, silent: false},
+                notify,
             );
             const now = Date.now();
             const nextStep = task.steps[nextIndex];
@@ -227,32 +757,89 @@ export async function completeTask(taskId, options = {}) {
             });
         }
 
+        const cycles = (task.cycleCount ?? 0) + 1;
         showReminderNotification(
             {
                 title: task.title,
                 message: options.fromReconcile
-                    ? `队列已全部完成（恢复时补发）`
-                    : `队列已全部完成`,
+                    ? `队列第 ${cycles} 轮已全部完成（恢复时补发）`
+                    : `队列第 ${cycles} 轮已全部完成`,
             },
-            {requireInteraction: false, silent: false},
+            notify,
         );
-        return patchTask(taskId, {status: TaskStatus.COMPLETED});
+
+        if (task.repeat && task.enabled) {
+            const now = Date.now();
+            const first = task.steps[0];
+            const targetAt = countdownTargetAt(first.durationMs, now);
+            await scheduleAlarm(taskId, targetAt);
+            return patchTask(taskId, {
+                status: TaskStatus.SCHEDULED,
+                currentStepIndex: 0,
+                cycleCount: cycles,
+                targetAt,
+            });
+        }
+
+        return patchTask(taskId, {
+            status: TaskStatus.IDLE,
+            currentStepIndex: 0,
+            cycleCount: cycles,
+            startedAt: undefined,
+            targetAt: undefined,
+        });
     }
 
-    let message = '';
-    if (task.type === TaskType.SCHEDULE) {
-        const pad = (n) => String(n).padStart(2, '0');
-        message = `定时 ${pad(task.hour)}:${pad(task.minute)} 已到`;
-    } else if (task.type === TaskType.COUNTDOWN) {
-        message = options.fromReconcile
-            ? `倒计时 ${formatDurationLabel(task.durationMs)} 已结束（恢复时补发）`
-            : `倒计时 ${formatDurationLabel(task.durationMs)} 已结束`;
+    if (task.type === TaskType.LOOP) {
+        const cycle = (task.cycleCount ?? 0) + 1;
+        const label = formatDurationLabel(task.durationMs);
+        const message = options.fromReconcile
+            ? `第 ${cycle} 轮 ${label} 已到（恢复时补发，下一轮已开始）`
+            : `第 ${cycle} 轮 ${label} 已到`;
+
+        showReminderNotification({title: task.title, message}, notify);
+
+        if (!task.enabled) {
+            return patchTask(taskId, {
+                status: TaskStatus.IDLE,
+                cycleCount: cycle,
+                startedAt: undefined,
+                targetAt: undefined,
+            });
+        }
+
+        const now = Date.now();
+        const targetAt = countdownTargetAt(task.durationMs, now);
+        await scheduleAlarm(taskId, targetAt);
+        return patchTask(taskId, {
+            status: TaskStatus.SCHEDULED,
+            cycleCount: cycle,
+            targetAt,
+        });
     }
 
-    showReminderNotification(
-        {title: task.title, message},
-        {requireInteraction: false, silent: false},
-    );
+    if (task.type === TaskType.COUNTDOWN) {
+        const label = formatDurationLabel(task.durationMs);
+        showReminderNotification(
+            {
+                title: task.title,
+                message: options.fromReconcile
+                    ? `倒计时 ${label} 已结束（恢复时补发）`
+                    : `倒计时 ${label} 已结束`,
+            },
+            notify,
+        );
+
+        if (task.role === TaskRole.INSTANCE) {
+            return patchTask(taskId, {status: TaskStatus.COMPLETED});
+        }
+
+        return patchTask(taskId, {
+            status: TaskStatus.IDLE,
+            startedAt: undefined,
+            targetAt: undefined,
+        });
+    }
 
     return patchTask(taskId, {status: TaskStatus.COMPLETED});
 }
@@ -267,9 +854,13 @@ function formatDurationLabel(durationMs) {
 
 /** @param {{ name: string }} alarm */
 export async function onAlarmFired(alarm) {
-    const taskId = taskIdFromAlarmName(alarm.name);
-    if (!taskId) return;
-    await completeTask(taskId);
+    const parsed = taskIdFromAlarmName(alarm.name);
+    if (!parsed) return;
+    if (parsed.kind === 'trigger') {
+        await activateTriggeredTask(parsed.taskId);
+        return;
+    }
+    await completeTask(parsed.taskId);
 }
 
 export function initTaskEngine() {
@@ -277,17 +868,17 @@ export function initTaskEngine() {
         onAlarmFired(alarm).catch((err) => console.error('[Timer] alarm handler failed', err));
     });
 
-    reconcileTasksOnStartup().catch((err) => console.error('[Timer] startup reconcile failed', err));
+    reconcileTasksOnStartup().catch((err) =>
+        console.error('[Timer] startup reconcile failed', err),
+    );
 }
 
-/** 便捷：分钟 -> 毫秒 */
 export function minutes(n) {
     return n * 60 * 1000;
 }
 
-/** 便捷：秒 -> 毫秒 */
 export function seconds(n) {
     return n * 1000;
 }
 
-export {remainingMs, parseTimeOfDay, nextFireAt};
+export {remainingMs, parseTimeOfDay, nextFireAt, nextScheduleFireAt} from './scheduleUtils.js';

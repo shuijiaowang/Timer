@@ -1,20 +1,35 @@
 export {
     createScheduleTask,
     createCountdownTask,
+    createLoopTask,
     createQueueTask,
+    createTaskFromTemplate,
+    spawnCountdownInstance,
     startCountdownTask,
+    startLoopTask,
     startQueueTask,
+    restartTask,
+    updateTask,
+    setTaskEnabled,
+    setTaskPinned,
+    deleteTask,
     cancelTask,
     listTasks,
     getTaskSnapshot,
     completeTask,
     reconcileTasksOnStartup,
+    activateTriggeredTask,
     initTaskEngine,
-    remainingMs,
-    parseTimeOfDay,
-    nextFireAt,
     minutes,
     seconds,
 } from './taskEngine.js';
 
-export {TaskType, TaskStatus} from './types.js';
+export {TaskType, TaskRole, TaskStatus, ReminderMode, ALL_WEEKDAYS} from './types.js';
+export {listBuiltinTemplates, getTemplateBuildPayload, qqFarmDurationMs} from './templates.js';
+export {sortTasks} from './taskSort.js';
+export {
+    remainingMs,
+    parseTimeOfDay,
+    nextFireAt,
+    nextScheduleFireAt,
+} from './scheduleUtils.js';
