@@ -412,19 +412,7 @@ onUnmounted(() => {
             </button>
         </header>
 
-        <nav class="tabs">
-            <button
-                v-for="t in TABS"
-                :key="t.id"
-                type="button"
-                class="tab"
-                :class="{active: tab === t.id}"
-                @click="tab = t.id"
-            >
-                {{ t.label }}
-            </button>
-        </nav>
-
+        <main class="app-body">
         <p v-if="error" class="error">{{ error }}</p>
 
         <!-- 定时 -->
@@ -805,6 +793,20 @@ onUnmounted(() => {
                 <li v-for="tpl in templates" :key="tpl.id">{{ tpl.title }} — {{ tpl.description }}</li>
             </ul>
         </section>
+        </main>
+
+        <nav class="tabs tabs-bottom">
+            <button
+                v-for="t in TABS"
+                :key="t.id"
+                type="button"
+                class="tab"
+                :class="{active: tab === t.id}"
+                @click="tab = t.id"
+            >
+                {{ t.label }}
+            </button>
+        </nav>
 
         <!-- 编辑层 -->
         <div v-if="editingTask" class="edit-overlay" @click.self="closeEdit">
@@ -887,11 +889,21 @@ onUnmounted(() => {
 
 <style scoped>
 .app {
+    display: flex;
+    flex-direction: column;
     max-width: 400px;
+    height: 100vh;
     margin: 0 auto;
-    padding: 10px 12px 24px;
+    padding: 10px 12px 0;
     text-align: left;
     font-size: 14px;
+}
+
+.app-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 58px;
 }
 
 .top {
@@ -909,9 +921,22 @@ onUnmounted(() => {
 .tabs {
     display: flex;
     gap: 4px;
-    margin-bottom: 10px;
-    border-bottom: 1px solid rgba(128, 128, 128, 0.25);
-    padding-bottom: 6px;
+}
+
+.tabs-bottom {
+    position: fixed;
+    left: 50%;
+    bottom: 0;
+    z-index: 50;
+    transform: translateX(-50%);
+    width: 100%;
+    max-width: 400px;
+    margin: 0;
+    padding: 8px 12px 10px;
+    border-top: 1px solid rgba(128, 128, 128, 0.25);
+    background: rgba(30, 30, 30, 0.92);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25);
 }
 
 .tab {
@@ -1013,6 +1038,12 @@ onUnmounted(() => {
 .row2 .field,
 .row3 .field {
     flex: 1;
+    min-width: 0;
+}
+
+.row2 .field input,
+.row3 .field input {
+    width: 100%;
 }
 
 .check {
@@ -1299,6 +1330,11 @@ onUnmounted(() => {
     .field select,
     .full {
         background: #fff;
+    }
+
+    .tabs-bottom {
+        background: rgba(255, 255, 255, 0.94);
+        box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
     }
 
     .edit-sheet {

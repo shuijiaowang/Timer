@@ -31,10 +31,10 @@ export default defineBackground(() => {
         if (message.type === 'popup_opened') {
             console.log('popup 已打开');
             const currentWindow = await browser.windows.getCurrent();
-            const width = Math.max(currentWindow.width - 400, 300);
-            const height = Math.max(currentWindow.height - 300, 200);
-            const left = Math.round((currentWindow.width - width) / 2);
-            const top = Math.round((currentWindow.height - height) / 2);
+            const width = 500;
+            const height = 800;
+            const left = 500;
+            const top = 500;
             await browser.windows.create({
                 url: '/popup_true.html',
                 type: 'popup',
