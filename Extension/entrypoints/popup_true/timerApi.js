@@ -14,7 +14,9 @@ async function callTimerTask(action, payload = {}) {
 export const timerApi = {
     createSchedule: (payload) => callTimerTask('createSchedule', payload),
     createCountdown: (payload) => callTimerTask('createCountdown', payload),
+    createQueue: (payload) => callTimerTask('createQueue', payload),
     startCountdown: (id) => callTimerTask('startCountdown', {id}),
+    startQueue: (id) => callTimerTask('startQueue', {id}),
     cancel: (id) => callTimerTask('cancel', {id}),
     list: () => callTimerTask('list'),
     get: (id) => callTimerTask('get', {id}),
@@ -22,8 +24,19 @@ export const timerApi = {
 
 export function taskDueAt(task) {
     if (task.type === 'schedule') return task.fireAtMs;
-    if (task.type === 'countdown' && task.targetAt) return task.targetAt;
+    if ((task.type === 'countdown' || task.type === 'queue') && task.targetAt) {
+        return task.targetAt;
+    }
     return null;
+}
+
+export function formatDurationParts(durationMs) {
+    const totalSec = Math.max(0, Math.floor(durationMs / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    if (m > 0 && s > 0) return `${m} 分 ${s} 秒`;
+    if (m > 0) return `${m} 分钟`;
+    return `${s} 秒`;
 }
 
 export function formatRemaining(ms) {

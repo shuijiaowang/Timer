@@ -1,4 +1,4 @@
-/** @typedef {'schedule' | 'countdown'} TaskType */
+/** @typedef {'schedule' | 'countdown' | 'queue'} TaskType */
 
 /** @typedef {'pending' | 'scheduled' | 'completed' | 'cancelled'} TaskStatus */
 
@@ -26,11 +26,31 @@
  * @property {number} createdAt
  */
 
-/** @typedef {ScheduleTask | CountdownTask} TimerTask */
+/**
+ * @typedef {object} QueueStep
+ * @property {string} title
+ * @property {number} durationMs
+ */
+
+/**
+ * @typedef {object} QueueTask
+ * @property {string} id
+ * @property {'queue'} type
+ * @property {string} title
+ * @property {QueueStep[]} steps
+ * @property {number} currentStepIndex
+ * @property {TaskStatus} status
+ * @property {number} [startedAt]
+ * @property {number} [targetAt] 当前步骤的墙钟到期时间
+ * @property {number} createdAt
+ */
+
+/** @typedef {ScheduleTask | CountdownTask | QueueTask} TimerTask */
 
 export const TaskType = {
     SCHEDULE: 'schedule',
     COUNTDOWN: 'countdown',
+    QUEUE: 'queue',
 };
 
 export const TaskStatus = {

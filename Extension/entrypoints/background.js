@@ -1,11 +1,13 @@
 import {
     cancelTask,
     createCountdownTask,
+    createQueueTask,
     createScheduleTask,
     getTaskSnapshot,
     initTaskEngine,
     listTasks,
     startCountdownTask,
+    startQueueTask,
 } from '../core/tasks/index.js';
 
 export default defineBackground(() => {
@@ -46,10 +48,20 @@ export default defineBackground(() => {
                             ok: true,
                             task: await createCountdownTask(payload),
                         };
+                    case 'createQueue':
+                        return {
+                            ok: true,
+                            task: await createQueueTask(payload),
+                        };
                     case 'startCountdown':
                         return {
                             ok: true,
                             task: await startCountdownTask(payload.id),
+                        };
+                    case 'startQueue':
+                        return {
+                            ok: true,
+                            task: await startQueueTask(payload.id),
                         };
                     case 'cancel':
                         return {

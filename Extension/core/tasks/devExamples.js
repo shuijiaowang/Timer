@@ -6,9 +6,11 @@
  */
 import {
     createCountdownTask,
+    createQueueTask,
     createScheduleTask,
     listTasks,
     minutes,
+    seconds,
 } from './index.js';
 
 export async function runDevExamples() {
@@ -23,6 +25,15 @@ export async function runDevExamples() {
         durationMs: minutes(15),
     });
     console.log('[Timer] 倒计时已创建', countdown);
+
+    const queue = await createQueueTask({
+        title: '演示队列 15s + 30s',
+        steps: [
+            {title: '第一段', durationMs: seconds(15)},
+            {title: '第二段', durationMs: seconds(30)},
+        ],
+    });
+    console.log('[Timer] 队列任务已创建', queue);
 
     console.log('[Timer] 全部任务', await listTasks());
 }

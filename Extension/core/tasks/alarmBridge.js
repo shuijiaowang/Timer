@@ -31,7 +31,10 @@ export async function syncAlarmsForTasks(tasks) {
         if (task.status !== TaskStatus.SCHEDULED) continue;
         if (task.type === TaskType.SCHEDULE && task.fireAtMs) {
             await scheduleAlarm(task.id, task.fireAtMs);
-        } else if (task.type === TaskType.COUNTDOWN && task.targetAt) {
+        } else if (
+            (task.type === TaskType.COUNTDOWN || task.type === TaskType.QUEUE) &&
+            task.targetAt
+        ) {
             await scheduleAlarm(task.id, task.targetAt);
         }
     }

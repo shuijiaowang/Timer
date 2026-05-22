@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import {
+    formatDurationParts,
     formatFireAt,
     formatRemaining,
     statusLabel,
@@ -20,6 +21,13 @@ const countdownTitle = ref('休息倒计时');
 const countdownMinutes = ref(1);
 const countdownSeconds = ref(0);
 const countdownStartNow = ref(true);
+
+const queueTitle = ref('番茄队列');
+const queueStartNow = ref(true);
+const queueSteps = ref([
+    { title: '工作', minutes: 0, seconds: 15 },
+    { title: '休息', minutes: 0, seconds: 30 },
+]);
 
 let tickTimer = null;
 
@@ -59,6 +67,32 @@ async function createSchedule() {
     }
 }
 
+function stepDurationMs(step) {
+    return (Number(step.minutes) || 0) * 60_000 + (Number(step.seconds) || 0) * 1000;
+}
+
+async function createQueue() {
+    error.value = '';
+    const steps = queueSteps.value.map((step, i) => ({
+        title: step.title?.trim() || `步骤 ${i + 1}`,
+        durationMs: stepDurationMs(step),
+    }));
+    if (steps.some((s) => s.durationMs <= 0)) {
+        error.value = '队列每一步时长必须大于 0';
+        return;
+    }
+    try {
+        await timerApi.createQueue({
+            title: queueTitle.value.trim() || '队列任务',
+            steps,
+            startNow: queueStartNow.value,
+        });
+        await refresh();
+    } catch (e) {
+        error.value = e?.message ?? String(e);
+    }
+}
+
 async function createCountdown() {
     error.value = '';
     const durationMs = countdownDurationMs.value;
@@ -88,6 +122,16 @@ async function startCountdown(id) {
     }
 }
 
+async function startQueue(id) {
+    error.value = '';
+    try {
+        await timerApi.startQueue(id);
+        await refresh();
+    } catch (e) {
+        error.value = e?.message ?? String(e);
+    }
+}
+
 async function cancelTask(id) {
     error.value = '';
     try {
@@ -109,8 +153,14 @@ function taskSummary(task) {
         const pad = (n) => String(n).padStart(2, '0');
         return `定时 ${pad(task.hour)}:${pad(task.minute)}`;
     }
-    const mins = Math.round(task.durationMs / 60000);
-    return `倒计时 ${mins} 分钟`;
+    if (task.type === 'queue') {
+        const idx = (task.currentStepIndex ?? 0) + 1;
+        const total = task.steps?.length ?? 0;
+        const step = task.steps?.[task.currentStepIndex];
+        const stepLabel = step ? formatDurationParts(step.durationMs) : '—';
+        return `队列 ${idx}/${total} · 当前「${step?.title ?? '—'}」${stepLabel}`;
+    }
+    return `倒计时 ${formatDurationParts(task.durationMs)}`;
 }
 
 onMounted(() => {
@@ -175,6 +225,41 @@ onUnmounted(() => {
         </section>
 
         <section class="card">
+            <h2>队列任务</h2>
+            <label class="field">
+                <span>队列标题</span>
+                <input v-model="queueTitle" type="text" placeholder="番茄队列" />
+            </label>
+            <div
+                v-for="(step, index) in queueSteps"
+                :key="index"
+                class="queue-step"
+            >
+                <p class="step-label">步骤 {{ index + 1 }}</p>
+                <label class="field">
+                    <span>标题</span>
+                    <input v-model="step.title" type="text" :placeholder="`步骤 ${index + 1}`" />
+                </label>
+                <div class="row">
+                    <label class="field compact">
+                        <span>分</span>
+                        <input v-model.number="step.minutes" type="number" min="0" />
+                    </label>
+                    <label class="field compact">
+                        <span>秒</span>
+                        <input v-model.number="step.seconds" type="number" min="0" />
+                    </label>
+                </div>
+            </div>
+            <label class="check">
+                <input v-model="queueStartNow" type="checkbox" />
+                创建后立即开始第一步
+            </label>
+            <button type="button" class="btn primary" @click="createQueue">创建队列</button>
+            <p class="hint">默认 15 秒 → 30 秒：第一步结束后自动开始第二步</p>
+        </section>
+
+        <section class="card">
             <h2>任务列表 <span class="badge">{{ tasks.length }}</span></h2>
             <p v-if="!tasks.length" class="empty">暂无任务</p>
             <ul v-else class="task-list">
@@ -198,6 +283,14 @@ onUnmounted(() => {
                             type="button"
                             class="btn small"
                             @click="startCountdown(task.id)"
+                        >
+                            启动
+                        </button>
+                        <button
+                            v-if="task.type === 'queue' && task.status === 'pending'"
+                            type="button"
+                            class="btn small"
+                            @click="startQueue(task.id)"
                         >
                             启动
                         </button>
@@ -312,6 +405,20 @@ onUnmounted(() => {
     margin: 8px 0 0;
     font-size: 0.75rem;
     opacity: 0.55;
+}
+
+.queue-step {
+    margin-bottom: 10px;
+    padding: 8px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.15);
+}
+
+.step-label {
+    margin: 0 0 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    opacity: 0.75;
 }
 
 .empty {
@@ -459,6 +566,10 @@ onUnmounted(() => {
     .btn.primary {
         background: #646cff;
         color: #fff;
+    }
+
+    .queue-step {
+        background: rgba(0, 0, 0, 0.04);
     }
 }
 </style>
