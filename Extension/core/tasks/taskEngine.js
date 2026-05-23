@@ -4,6 +4,7 @@ import {
     clearAlarm,
     scheduleAlarm,
     scheduleTriggerAlarm,
+    scheduleWindowEndAlarm,
     syncAlarmsForTasks,
     taskIdFromAlarmName,
     clearAllAlarms,
@@ -11,10 +12,14 @@ import {
 import {
     countdownTargetAt,
     nextScheduleFireAt,
+    nextWindowStartAt,
     normalizeRepeatDays,
     parseCalendarDate,
     parseTimeOfDay,
+    parseWindowTime,
     remainingMs,
+    todayAtMs,
+    todayWindowEndAt,
 } from './scheduleUtils.js';
 import {BUILTIN_TEMPLATES, getTemplateBuildPayload, listBuiltinTemplates} from './templates.js';
 import {
@@ -111,6 +116,139 @@ async function applyTriggerAlarm(task) {
     }
     await clearAlarm(task.id);
     return task;
+}
+
+/** @param {import('./types.js').LoopTask | import('./types.js').QueueTask} task */
+function windowFieldsFromOptions({
+    windowStart,
+    windowEnd,
+    repeatDays,
+}) {
+    const start = parseWindowTime(windowStart);
+    const end = parseWindowTime(windowEnd);
+    if (start && end) {
+        const startMs = todayAtMs(start.hour, start.minute);
+        const endMs = todayAtMs(end.hour, end.minute);
+        if (endMs <= startMs) {
+            throw new Error('结束时间必须晚于开始时间（暂不支持跨午夜时段）');
+        }
+    }
+    return {
+        windowStart: start,
+        windowEnd: end,
+        repeatDays: normalizeRepeatDays(repeatDays),
+        nextWindowStartAtMs: null,
+    };
+}
+
+/** @param {import('./types.js').LoopTask | import('./types.js').QueueTask} task */
+async function scheduleWindowEndIfNeeded(task) {
+    if (!task.windowEnd || task.status !== TaskStatus.SCHEDULED) return task;
+    const endMs = todayWindowEndAt(task.windowEnd);
+    if (endMs) {
+        await scheduleWindowEndAlarm(task.id, endMs);
+    }
+    return task;
+}
+
+/**
+ * 为循环/队列注册「下次自动开始」
+ * @param {import('./types.js').LoopTask | import('./types.js').QueueTask} task
+ */
+async function applyWindowSchedule(task) {
+    if (task.type !== TaskType.LOOP && task.type !== TaskType.QUEUE) return task;
+    if (!task.windowStart) {
+        if (task.nextWindowStartAtMs != null) {
+            return patchTask(task.id, {nextWindowStartAtMs: null});
+        }
+        return task;
+    }
+
+    if (!task.enabled) {
+        await clearAlarm(task.id);
+        return patchTask(task.id, {
+            status: TaskStatus.IDLE,
+            nextWindowStartAtMs: null,
+            triggerAtMs: null,
+        });
+    }
+
+    if (task.status === TaskStatus.SCHEDULED) {
+        return scheduleWindowEndIfNeeded(task);
+    }
+
+    const nextStart = nextWindowStartAt({
+        windowStart: task.windowStart,
+        repeatDays: task.repeatDays ?? ALL_WEEKDAYS,
+    });
+
+    if (nextStart == null) {
+        await clearAlarm(task.id);
+        return patchTask(task.id, {
+            status: TaskStatus.IDLE,
+            nextWindowStartAtMs: null,
+            triggerAtMs: null,
+        });
+    }
+
+    await scheduleTriggerAlarm(task.id, nextStart);
+    return patchTask(task.id, {
+        status: TaskStatus.PENDING,
+        nextWindowStartAtMs: nextStart,
+        triggerAtMs: nextStart,
+    });
+}
+
+/** @param {string} taskId */
+async function stopTimedTaskAtWindowEnd(taskId, options = {}) {
+    const task = await getTask(taskId);
+    if (!task || (task.type !== TaskType.LOOP && task.type !== TaskType.QUEUE)) {
+        return null;
+    }
+    await clearAlarm(taskId);
+    const notify = await notifyOptions();
+    if (!options.silent) {
+        showReminderNotification(
+            {
+                title: task.title,
+                message: options.fromReconcile
+                    ? '今日时段已结束（恢复时补发）'
+                    : '今日时段已结束',
+            },
+            notify,
+        );
+    }
+    const updated = await patchTask(taskId, {
+        status: TaskStatus.IDLE,
+        startedAt: undefined,
+        targetAt: undefined,
+        currentStepIndex: 0,
+        triggerAtMs: null,
+    });
+    return applyWindowSchedule(/** @type {import('./types.js').LoopTask | import('./types.js').QueueTask} */ (updated));
+}
+
+/**
+ * @param {import('./types.js').LoopTask | import('./types.js').QueueTask} task
+ * @param {number} now
+ */
+function shouldStopForWindow(task, now = Date.now()) {
+    if (!task.windowEnd) return false;
+    const endMs = todayAtMs(task.windowEnd.hour, task.windowEnd.minute, now);
+    return now >= endMs;
+}
+
+/**
+ * @param {import('./types.js').LoopTask | import('./types.js').QueueTask} task
+ * @param {number} durationMs
+ * @param {number} [now]
+ */
+function nextFireWithinWindow(task, durationMs, now = Date.now()) {
+    const targetAt = countdownTargetAt(durationMs, now);
+    if (!task.windowEnd) return targetAt;
+    const endMs = todayAtMs(task.windowEnd.hour, task.windowEnd.minute, now);
+    if (now >= endMs || targetAt > endMs) return null;
+    return targetAt;
 }
 
 /**
@@ -258,6 +396,9 @@ export async function createLoopTask({
     enabled = true,
     pinned = false,
     triggerAtMs = null,
+    windowStart = null,
+    windowEnd = null,
+    repeatDays = ALL_WEEKDAYS,
     reminderMode = ReminderMode.QUICK,
     sourceTemplateId,
 }) {
@@ -274,10 +415,14 @@ export async function createLoopTask({
         cycleCount: 0,
         status: TaskStatus.IDLE,
         triggerAtMs: triggerAtMs ?? null,
+        ...windowFieldsFromOptions({windowStart, windowEnd, repeatDays}),
         ...baseFields({enabled, pinned, reminderMode, sourceTemplateId}),
     };
     await upsertTask(task);
-    if (triggerAtMs && triggerAtMs > Date.now() && enabled) {
+    if (task.windowStart && enabled && !startNow) {
+        return applyWindowSchedule(task);
+    }
+    if (triggerAtMs && triggerAtMs > Date.now() && enabled && !task.windowStart) {
         await applyTriggerAlarm(task);
     }
     if (startNow) {
@@ -297,6 +442,9 @@ export async function createQueueTask({
     enabled = true,
     pinned = false,
     triggerAtMs = null,
+    windowStart = null,
+    windowEnd = null,
+    repeatDays = ALL_WEEKDAYS,
     reminderMode = ReminderMode.QUICK,
     sourceTemplateId,
 }) {
@@ -324,10 +472,14 @@ export async function createQueueTask({
         cycleCount: 0,
         status: TaskStatus.IDLE,
         triggerAtMs: triggerAtMs ?? null,
+        ...windowFieldsFromOptions({windowStart, windowEnd, repeatDays}),
         ...baseFields({enabled, pinned, reminderMode, sourceTemplateId}),
     };
     await upsertTask(task);
-    if (triggerAtMs && triggerAtMs > Date.now() && enabled) {
+    if (task.windowStart && enabled && !startNow) {
+        return applyWindowSchedule(task);
+    }
+    if (triggerAtMs && triggerAtMs > Date.now() && enabled && !task.windowStart) {
         await applyTriggerAlarm(task);
     }
     if (startNow) {
@@ -452,14 +604,23 @@ export async function startLoopTask(id) {
         throw new Error(`任务已结束: ${task.status}`);
     }
     const now = Date.now();
-    const targetAt = countdownTargetAt(task.durationMs, now);
+    if (shouldStopForWindow(task, now)) {
+        throw new Error('今日运行时段已结束');
+    }
+    const targetAt = nextFireWithinWindow(task, task.durationMs, now);
+    if (targetAt == null) {
+        return stopTimedTaskAtWindowEnd(id, {silent: true});
+    }
     const updated = await patchTask(id, {
         status: TaskStatus.SCHEDULED,
         startedAt: task.startedAt ?? now,
         targetAt,
         cycleCount: task.cycleCount ?? 0,
+        triggerAtMs: null,
+        nextWindowStartAtMs: null,
     });
     await scheduleAlarm(id, targetAt);
+    await scheduleWindowEndIfNeeded(updated);
     return updated;
 }
 
@@ -474,15 +635,24 @@ export async function startQueueTask(id) {
         throw new Error(`任务已结束: ${task.status}`);
     }
     const now = Date.now();
+    if (shouldStopForWindow(task, now)) {
+        throw new Error('今日运行时段已结束');
+    }
     const step = task.steps[task.currentStepIndex ?? 0];
-    const targetAt = countdownTargetAt(step.durationMs, now);
+    const targetAt = nextFireWithinWindow(task, step.durationMs, now);
+    if (targetAt == null) {
+        return stopTimedTaskAtWindowEnd(id, {silent: true});
+    }
     const updated = await patchTask(id, {
         status: TaskStatus.SCHEDULED,
         startedAt: task.startedAt ?? now,
         targetAt,
         currentStepIndex: task.currentStepIndex ?? 0,
+        triggerAtMs: null,
+        nextWindowStartAtMs: null,
     });
     await scheduleAlarm(id, targetAt);
+    await scheduleWindowEndIfNeeded(updated);
     return updated;
 }
 
@@ -562,6 +732,25 @@ export async function updateTask(id, patch) {
         next.durationMs = patch.durationMs;
     }
 
+    if (task.type === TaskType.LOOP || task.type === TaskType.QUEUE) {
+        if (
+            patch.windowStart !== undefined ||
+            patch.windowEnd !== undefined ||
+            patch.repeatDays != null
+        ) {
+            const merged = {
+                windowStart:
+                    patch.windowStart !== undefined
+                        ? patch.windowStart
+                        : task.windowStart,
+                windowEnd:
+                    patch.windowEnd !== undefined ? patch.windowEnd : task.windowEnd,
+                repeatDays: patch.repeatDays ?? task.repeatDays,
+            };
+            Object.assign(next, windowFieldsFromOptions(merged));
+        }
+    }
+
     if (task.type === TaskType.QUEUE) {
         if (patch.repeat != null) next.repeat = Boolean(patch.repeat);
         if (patch.steps != null) {
@@ -583,12 +772,21 @@ export async function updateTask(id, patch) {
     if (patch.enabled === false && updated.status === TaskStatus.SCHEDULED) {
         await clearAlarm(id);
         if (updated.type !== TaskType.SCHEDULE) {
-            return patchTask(id, {
+            const stopped = await patchTask(id, {
                 status: TaskStatus.IDLE,
                 startedAt: undefined,
                 targetAt: undefined,
                 currentStepIndex: 0,
+                triggerAtMs: null,
             });
+            if (stopped.type === TaskType.LOOP || stopped.type === TaskType.QUEUE) {
+                return applyWindowSchedule(
+                    /** @type {import('./types.js').LoopTask | import('./types.js').QueueTask} */ (
+                        stopped
+                    ),
+                );
+            }
+            return stopped;
         }
     }
 
@@ -596,10 +794,35 @@ export async function updateTask(id, patch) {
         return applyScheduleTiming(/** @type {import('./types.js').ScheduleTask} */ (updated));
     }
 
+    if (updated.type === TaskType.LOOP || updated.type === TaskType.QUEUE) {
+        const timed = /** @type {import('./types.js').LoopTask | import('./types.js').QueueTask} */ (
+            updated
+        );
+        if (timed.windowStart && updated.enabled && updated.status === TaskStatus.IDLE) {
+            return applyWindowSchedule(timed);
+        }
+        if (timed.windowStart && updated.status === TaskStatus.SCHEDULED) {
+            return scheduleWindowEndIfNeeded(timed);
+        }
+    }
+
     if (
         updated.triggerAtMs &&
         updated.triggerAtMs > Date.now() &&
         updated.enabled &&
+        (updated.status === TaskStatus.IDLE || updated.status === TaskStatus.PENDING) &&
+        updated.type !== TaskType.LOOP &&
+        updated.type !== TaskType.QUEUE
+    ) {
+        return applyTriggerAlarm(updated);
+    }
+
+    if (
+        (updated.type === TaskType.LOOP || updated.type === TaskType.QUEUE) &&
+        updated.triggerAtMs &&
+        updated.triggerAtMs > Date.now() &&
+        updated.enabled &&
+        !updated.windowStart &&
         (updated.status === TaskStatus.IDLE || updated.status === TaskStatus.PENDING)
     ) {
         return applyTriggerAlarm(updated);
@@ -652,12 +875,21 @@ export async function cancelTask(id) {
         task.type === TaskType.LOOP ||
         task.type === TaskType.QUEUE
     ) {
-        return patchTask(id, {
+        const updated = await patchTask(id, {
             status: TaskStatus.IDLE,
             startedAt: undefined,
             targetAt: undefined,
             currentStepIndex: 0,
+            triggerAtMs: null,
         });
+        if (task.type === TaskType.LOOP || task.type === TaskType.QUEUE) {
+            return applyWindowSchedule(
+                /** @type {import('./types.js').LoopTask | import('./types.js').QueueTask} */ (
+                    updated
+                ),
+            );
+        }
+        return updated;
     }
 
     return patchTask(id, {status: TaskStatus.CANCELLED});
@@ -683,16 +915,32 @@ export async function activateTriggeredTask(taskId) {
     const task = await getTask(taskId);
     if (!task || !task.enabled) return null;
 
-    await patchTask(taskId, {triggerAtMs: null});
+    const isWindowAutoStart =
+        (task.type === TaskType.LOOP || task.type === TaskType.QUEUE) &&
+        task.windowStart &&
+        task.triggerAtMs === task.nextWindowStartAtMs;
+
+    await patchTask(taskId, {
+        triggerAtMs: null,
+        nextWindowStartAtMs: isWindowAutoStart ? null : task.nextWindowStartAtMs,
+    });
 
     if (task.type === TaskType.COUNTDOWN && task.role === TaskRole.PRESET) {
         return spawnCountdownInstance(taskId, {startImmediately: true});
     }
     if (task.type === TaskType.LOOP) {
-        return startLoopTask(taskId);
+        try {
+            return await startLoopTask(taskId);
+        } catch (err) {
+            return applyWindowSchedule(/** @type {import('./types.js').LoopTask} */ (task));
+        }
     }
     if (task.type === TaskType.QUEUE) {
-        return startQueueTask(taskId);
+        try {
+            return await startQueueTask(taskId);
+        } catch (err) {
+            return applyWindowSchedule(/** @type {import('./types.js').QueueTask} */ (task));
+        }
     }
     return null;
 }
@@ -729,8 +977,22 @@ export async function reconcileTasksOnStartup() {
     }
 
     const fresh = changed ? await loadTasks() : tasks;
-    await syncAlarmsForTasks(listActiveTasks(fresh));
-    return fresh;
+    for (const task of fresh) {
+        if (
+            (task.type === TaskType.LOOP || task.type === TaskType.QUEUE) &&
+            task.role === TaskRole.PRESET &&
+            task.windowStart &&
+            task.enabled &&
+            task.status === TaskStatus.IDLE
+        ) {
+            await applyWindowSchedule(
+                /** @type {import('./types.js').LoopTask | import('./types.js').QueueTask} */ (task),
+            );
+        }
+    }
+    const synced = await loadTasks();
+    await syncAlarmsForTasks(listActiveTasks(synced));
+    return synced;
 }
 
 /**
@@ -800,13 +1062,27 @@ export async function completeTask(taskId, options = {}) {
                 notify,
             );
             const now = Date.now();
+            if (shouldStopForWindow(task, now)) {
+                return stopTimedTaskAtWindowEnd(taskId, {
+                    fromReconcile: options.fromReconcile,
+                });
+            }
             const nextStep = task.steps[nextIndex];
-            const targetAt = countdownTargetAt(nextStep.durationMs, now);
+            const targetAt = nextFireWithinWindow(task, nextStep.durationMs, now);
+            if (targetAt == null) {
+                return stopTimedTaskAtWindowEnd(taskId, {
+                    fromReconcile: options.fromReconcile,
+                });
+            }
             await scheduleAlarm(taskId, targetAt);
-            return patchTask(taskId, {
+            const updated = await patchTask(taskId, {
                 currentStepIndex: nextIndex,
                 targetAt,
             });
+            await scheduleWindowEndIfNeeded(
+                /** @type {import('./types.js').QueueTask} */ (updated),
+            );
+            return updated;
         }
 
         const cycles = (task.cycleCount ?? 0) + 1;
@@ -822,24 +1098,41 @@ export async function completeTask(taskId, options = {}) {
 
         if (task.repeat && task.enabled) {
             const now = Date.now();
+            if (shouldStopForWindow(task, now)) {
+                return stopTimedTaskAtWindowEnd(taskId, {
+                    fromReconcile: options.fromReconcile,
+                });
+            }
             const first = task.steps[0];
-            const targetAt = countdownTargetAt(first.durationMs, now);
+            const targetAt = nextFireWithinWindow(task, first.durationMs, now);
+            if (targetAt == null) {
+                return stopTimedTaskAtWindowEnd(taskId, {
+                    fromReconcile: options.fromReconcile,
+                });
+            }
             await scheduleAlarm(taskId, targetAt);
-            return patchTask(taskId, {
+            const updated = await patchTask(taskId, {
                 status: TaskStatus.SCHEDULED,
                 currentStepIndex: 0,
                 cycleCount: cycles,
                 targetAt,
             });
+            await scheduleWindowEndIfNeeded(
+                /** @type {import('./types.js').QueueTask} */ (updated),
+            );
+            return updated;
         }
 
-        return patchTask(taskId, {
+        const idleQueue = await patchTask(taskId, {
             status: TaskStatus.IDLE,
             currentStepIndex: 0,
             cycleCount: cycles,
             startedAt: undefined,
             targetAt: undefined,
         });
+        return applyWindowSchedule(
+            /** @type {import('./types.js').QueueTask} */ (idleQueue),
+        );
     }
 
     if (task.type === TaskType.LOOP) {
@@ -852,22 +1145,39 @@ export async function completeTask(taskId, options = {}) {
         showReminderNotification({title: task.title, message}, notify);
 
         if (!task.enabled) {
-            return patchTask(taskId, {
+            const idleLoop = await patchTask(taskId, {
                 status: TaskStatus.IDLE,
                 cycleCount: cycle,
                 startedAt: undefined,
                 targetAt: undefined,
             });
+            return applyWindowSchedule(
+                /** @type {import('./types.js').LoopTask} */ (idleLoop),
+            );
         }
 
         const now = Date.now();
-        const targetAt = countdownTargetAt(task.durationMs, now);
+        if (shouldStopForWindow(task, now)) {
+            return stopTimedTaskAtWindowEnd(taskId, {
+                fromReconcile: options.fromReconcile,
+            });
+        }
+        const targetAt = nextFireWithinWindow(task, task.durationMs, now);
+        if (targetAt == null) {
+            return stopTimedTaskAtWindowEnd(taskId, {
+                fromReconcile: options.fromReconcile,
+            });
+        }
         await scheduleAlarm(taskId, targetAt);
-        return patchTask(taskId, {
+        const updated = await patchTask(taskId, {
             status: TaskStatus.SCHEDULED,
             cycleCount: cycle,
             targetAt,
         });
+        await scheduleWindowEndIfNeeded(
+            /** @type {import('./types.js').LoopTask} */ (updated),
+        );
+        return updated;
     }
 
     if (task.type === TaskType.COUNTDOWN) {
@@ -910,6 +1220,10 @@ export async function onAlarmFired(alarm) {
     if (!parsed) return;
     if (parsed.kind === 'trigger') {
         await activateTriggeredTask(parsed.taskId);
+        return;
+    }
+    if (parsed.kind === 'window-end') {
+        await stopTimedTaskAtWindowEnd(parsed.taskId);
         return;
     }
     await completeTask(parsed.taskId);

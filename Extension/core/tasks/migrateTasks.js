@@ -97,6 +97,10 @@ function migrateOneTask(task) {
             status: running ? TaskStatus.SCHEDULED : TaskStatus.IDLE,
             cycleCount: task.cycleCount ?? 0,
             triggerAtMs: task.triggerAtMs ?? null,
+            windowStart: task.windowStart ?? null,
+            windowEnd: task.windowEnd ?? null,
+            repeatDays: task.repeatDays ?? [...ALL_WEEKDAYS],
+            nextWindowStartAtMs: task.nextWindowStartAtMs ?? null,
             ...(running
                 ? {}
                 : {startedAt: undefined, targetAt: undefined}),
@@ -121,6 +125,10 @@ function migrateOneTask(task) {
                     : TaskStatus.SCHEDULED
                 : TaskStatus.IDLE,
             triggerAtMs: task.triggerAtMs ?? null,
+            windowStart: task.windowStart ?? null,
+            windowEnd: task.windowEnd ?? null,
+            repeatDays: task.repeatDays ?? [...ALL_WEEKDAYS],
+            nextWindowStartAtMs: task.nextWindowStartAtMs ?? null,
             ...(running
                 ? {}
                 : {

@@ -57,6 +57,10 @@ const queueSteps = ref([
     {title: '工作', minutes: 45, seconds: 0},
     {title: '休息', minutes: 15, seconds: 0},
 ]);
+const comboUseWindow = ref(false);
+const comboWindowStart = ref('09:00');
+const comboWindowEnd = ref('18:00');
+const comboWindowDays = ref([1, 2, 3, 4, 5]);
 
 // —— QQ 农场模板 ——
 const farmBaseHours = ref(8);
@@ -143,6 +147,37 @@ function parseDateInput(str) {
     const m = String(str).trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
     if (!m) return null;
     return {year: Number(m[1]), month: Number(m[2]), day: Number(m[3])};
+}
+
+function windowPayloadFromForm(useWindow, start, end, days) {
+    if (!useWindow) return {};
+    const startStr = start.trim();
+    const endStr = end.trim();
+    if (!startStr) {
+        error.value = '请填写开始时间';
+        return null;
+    }
+    const payload = {
+        windowStart: startStr,
+        repeatDays: [...days],
+    };
+    if (endStr) payload.windowEnd = endStr;
+    return payload;
+}
+
+function windowSummary(task) {
+    if (!task.windowStart && !task.windowEnd) return '';
+    const s = task.windowStart ? padTime(task.windowStart.hour, task.windowStart.minute) : '—';
+    const e = task.windowEnd ? padTime(task.windowEnd.hour, task.windowEnd.minute) : '—';
+    const days = task.repeatDays ?? [];
+    let dayLabel = '每天';
+    if (days.length === 5 && [1, 2, 3, 4, 5].every((d) => days.includes(d))) {
+        dayLabel = '工作日';
+    } else if (days.length < 7) {
+        const labels = WEEKDAY_LABELS.filter((w) => days.includes(w.value)).map((w) => w.label);
+        dayLabel = labels.length ? `周${labels.join('')}` : '未设';
+    }
+    return `${s}–${e} · ${dayLabel}`;
 }
 
 function scheduleRepeatLabel(task) {
@@ -234,11 +269,19 @@ async function createLoopPreset() {
         error.value = '间隔必须大于 0';
         return;
     }
+    const windowFields = windowPayloadFromForm(
+        comboUseWindow.value,
+        comboWindowStart.value,
+        comboWindowEnd.value,
+        comboWindowDays.value,
+    );
+    if (windowFields === null) return;
     await run(() =>
         timerApi.createLoop({
             title: loopTitle.value.trim() || '循环提醒',
             durationMs,
             reminderMode: defaultReminderMode(),
+            ...windowFields,
         }),
     );
 }
@@ -256,12 +299,20 @@ async function createQueuePreset() {
         error.value = '每一步时长必须大于 0';
         return;
     }
+    const windowFields = windowPayloadFromForm(
+        comboUseWindow.value,
+        comboWindowStart.value,
+        comboWindowEnd.value,
+        comboWindowDays.value,
+    );
+    if (windowFields === null) return;
     await run(() =>
         timerApi.createQueue({
             title: queueTitle.value.trim() || '队列任务',
             steps,
             repeat: queueRepeat.value,
             reminderMode: defaultReminderMode(),
+            ...windowFields,
         }),
     );
 }
@@ -319,6 +370,10 @@ const editDurationSec = ref(0);
 const editFavorite = ref(false);
 const editRepeat = ref(false);
 const editSteps = ref([]);
+const editUseWindow = ref(false);
+const editWindowStart = ref('09:00');
+const editWindowEnd = ref('18:00');
+const editWindowDays = ref([1, 2, 3, 4, 5]);
 
 watch(editingTask, (task) => {
     if (!task) return;
@@ -340,6 +395,16 @@ watch(editingTask, (task) => {
         editDurationMin.value = Math.floor((totalSec % 3600) / 60);
         editDurationSec.value = totalSec % 60;
         editFavorite.value = Boolean(task.isFavorite);
+    }
+    if (task.type === 'loop' || task.type === 'queue') {
+        editUseWindow.value = Boolean(task.windowStart || task.windowEnd);
+        editWindowStart.value = task.windowStart
+            ? padTime(task.windowStart.hour, task.windowStart.minute)
+            : '09:00';
+        editWindowEnd.value = task.windowEnd
+            ? padTime(task.windowEnd.hour, task.windowEnd.minute)
+            : '18:00';
+        editWindowDays.value = [...(task.repeatDays ?? [1, 2, 3, 4, 5])];
     }
     if (task.type === 'queue') {
         editRepeat.value = Boolean(task.repeat);
@@ -387,6 +452,21 @@ async function saveEdit() {
     if (task.type === 'countdown') {
         patch.isFavorite = editFavorite.value;
     }
+    if (task.type === 'loop' || task.type === 'queue') {
+        if (editUseWindow.value) {
+            const windowFields = windowPayloadFromForm(
+                true,
+                editWindowStart.value,
+                editWindowEnd.value,
+                editWindowDays.value,
+            );
+            if (windowFields === null) return;
+            Object.assign(patch, windowFields);
+        } else {
+            patch.windowStart = null;
+            patch.windowEnd = null;
+        }
+    }
     if (task.type === 'queue') {
         patch.repeat = editRepeat.value;
         patch.steps = editSteps.value.map((s, i) => ({
@@ -423,10 +503,13 @@ function taskSummary(task) {
     if (task.type === 'queue') {
         const n = task.steps?.length ?? 0;
         const rep = task.repeat ? '循环' : '单次';
-        return `${n} 步 · ${rep}`;
+        const win = windowSummary(task);
+        return win ? `${n} 步 · ${rep} · ${win}` : `${n} 步 · ${rep}`;
     }
     if (task.type === 'loop') {
-        return `每 ${formatDurationParts(task.durationMs)}`;
+        const win = windowSummary(task);
+        const interval = `每 ${formatDurationParts(task.durationMs)}`;
+        return win ? `${interval} · ${win}` : interval;
     }
     return formatDurationParts(task.durationMs);
 }
@@ -702,6 +785,41 @@ onUnmounted(() => {
                 </button>
             </div>
 
+            <div class="card form window-card">
+                <h2>每日时段（可选）</h2>
+                <p class="hint">
+                    如 9:00 自动开始、18:00 自动结束，时段内按下方间隔或队列步骤提醒
+                </p>
+                <label class="check">
+                    <input v-model="comboUseWindow" type="checkbox" />
+                    启用每日开始 / 结束时间
+                </label>
+                <template v-if="comboUseWindow">
+                    <div class="row2">
+                        <label class="field">
+                            <span>开始</span>
+                            <input v-model="comboWindowStart" type="text" placeholder="09:00" />
+                        </label>
+                        <label class="field">
+                            <span>结束</span>
+                            <input v-model="comboWindowEnd" type="text" placeholder="18:00" />
+                        </label>
+                    </div>
+                    <div class="weekdays">
+                        <button
+                            v-for="w in WEEKDAY_LABELS"
+                            :key="w.value"
+                            type="button"
+                            class="wd"
+                            :class="{on: comboWindowDays.includes(w.value)}"
+                            @click="toggleWeekday(comboWindowDays, w.value)"
+                        >
+                            {{ w.label }}
+                        </button>
+                    </div>
+                </template>
+            </div>
+
             <div v-show="comboMode === 'queue'" class="card form">
                 <h2>新建队列</h2>
                 <label class="field">
@@ -755,7 +873,13 @@ onUnmounted(() => {
                         <strong>{{ task.title }}</strong>
                         <span class="meta">{{ typeLabel[task.type] }} · {{ taskSummary(task) }}</span>
                         <span
-                            v-if="task.status === 'scheduled' && taskDueAt(task)"
+                            v-if="task.status === 'pending' && task.nextWindowStartAtMs"
+                            class="due"
+                        >
+                            {{ formatFireAt(task.nextWindowStartAtMs) }} 自动开始
+                        </span>
+                        <span
+                            v-else-if="task.status === 'scheduled' && taskDueAt(task)"
                             class="due"
                         >
                             剩余 {{ formatRemaining(remainingFor(task)) }}
@@ -909,6 +1033,37 @@ onUnmounted(() => {
                             {{ w.label }}
                         </button>
                     </div>
+                </template>
+
+                <template v-if="editingTask.type === 'loop' || editingTask.type === 'queue'">
+                    <label class="check">
+                        <input v-model="editUseWindow" type="checkbox" />
+                        每日开始 / 结束时间
+                    </label>
+                    <template v-if="editUseWindow">
+                        <div class="row2">
+                            <label class="field">
+                                <span>开始</span>
+                                <input v-model="editWindowStart" type="text" />
+                            </label>
+                            <label class="field">
+                                <span>结束</span>
+                                <input v-model="editWindowEnd" type="text" />
+                            </label>
+                        </div>
+                        <div class="weekdays">
+                            <button
+                                v-for="w in WEEKDAY_LABELS"
+                                :key="w.value"
+                                type="button"
+                                class="wd"
+                                :class="{on: editWindowDays.includes(w.value)}"
+                                @click="toggleWeekday(editWindowDays, w.value)"
+                            >
+                                {{ w.label }}
+                            </button>
+                        </div>
+                    </template>
                 </template>
 
                 <template v-if="editingTask.type === 'countdown' || editingTask.type === 'loop'">

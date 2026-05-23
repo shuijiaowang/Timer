@@ -138,3 +138,75 @@ export function countdownTargetAt(durationMs, startedAtMs = Date.now()) {
 export function remainingMs(targetAtMs, nowMs = Date.now()) {
     return Math.max(0, targetAtMs - nowMs);
 }
+
+/**
+ * @param {string | { hour: number, minute: number } | null | undefined} input
+ * @returns {{ hour: number, minute: number } | null}
+ */
+export function parseWindowTime(input) {
+    if (input == null || input === '') return null;
+    return parseTimeOfDay(input);
+}
+
+/**
+ * @param {number} hour
+ * @param {number} minute
+ * @param {number} [nowMs]
+ */
+export function todayAtMs(hour, minute, nowMs = Date.now()) {
+    const now = new Date(nowMs);
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0).getTime();
+}
+
+/**
+ * 当日时段（start < end，不支持跨午夜）
+ * @param {number} nowMs
+ * @param {{ hour: number, minute: number } | null} windowStart
+ * @param {{ hour: number, minute: number } | null} windowEnd
+ */
+export function isWithinDailyWindow(nowMs, windowStart, windowEnd) {
+    if (!windowStart && !windowEnd) return true;
+    if (windowStart && windowEnd) {
+        const startMs = todayAtMs(windowStart.hour, windowStart.minute, nowMs);
+        const endMs = todayAtMs(windowEnd.hour, windowEnd.minute, nowMs);
+        if (endMs <= startMs) return false;
+        return nowMs >= startMs && nowMs < endMs;
+    }
+    if (windowStart) {
+        const startMs = todayAtMs(windowStart.hour, windowStart.minute, nowMs);
+        return nowMs >= startMs;
+    }
+    const endMs = todayAtMs(windowEnd.hour, windowEnd.minute, nowMs);
+    return nowMs < endMs;
+}
+
+/**
+ * 下一次「时段开始」触发（复用周重复逻辑）
+ * @param {object} options
+ * @param {{ hour: number, minute: number }} options.windowStart
+ * @param {number[]} [options.repeatDays]
+ * @param {number} [nowMs]
+ */
+export function nextWindowStartAt({windowStart, repeatDays = ALL_WEEKDAYS}, nowMs = Date.now()) {
+    if (!windowStart) return null;
+    return nextScheduleFireAt(
+        {
+            hour: windowStart.hour,
+            minute: windowStart.minute,
+            repeatDays,
+            date: null,
+        },
+        nowMs,
+    );
+}
+
+/**
+ * 今日尚未过去的结束时刻；已过则 null
+ * @param {{ hour: number, minute: number }} windowEnd
+ * @param {number} [nowMs]
+ */
+export function todayWindowEndAt(windowEnd, nowMs = Date.now()) {
+    if (!windowEnd) return null;
+    const endMs = todayAtMs(windowEnd.hour, windowEnd.minute, nowMs);
+    return endMs > nowMs ? endMs : null;
+}

@@ -1,11 +1,12 @@
 const ALARM_PREFIX = 'timer-task:';
 const TRIGGER_SUFFIX = ':trigger';
+const WINDOW_END_SUFFIX = ':window-end';
 
-/** @param {string} taskId @param {'fire' | 'trigger'} [kind] */
+/** @param {string} taskId @param {'fire' | 'trigger' | 'window-end'} [kind] */
 export function alarmNameForTask(taskId, kind = 'fire') {
-    return kind === 'trigger'
-        ? `${ALARM_PREFIX}${taskId}${TRIGGER_SUFFIX}`
-        : `${ALARM_PREFIX}${taskId}`;
+    if (kind === 'trigger') return `${ALARM_PREFIX}${taskId}${TRIGGER_SUFFIX}`;
+    if (kind === 'window-end') return `${ALARM_PREFIX}${taskId}${WINDOW_END_SUFFIX}`;
+    return `${ALARM_PREFIX}${taskId}`;
 }
 
 /** @param {string} alarmName */
@@ -14,6 +15,9 @@ export function taskIdFromAlarmName(alarmName) {
     const rest = alarmName.slice(ALARM_PREFIX.length);
     if (rest.endsWith(TRIGGER_SUFFIX)) {
         return {taskId: rest.slice(0, -TRIGGER_SUFFIX.length), kind: 'trigger'};
+    }
+    if (rest.endsWith(WINDOW_END_SUFFIX)) {
+        return {taskId: rest.slice(0, -WINDOW_END_SUFFIX.length), kind: 'window-end'};
     }
     return {taskId: rest, kind: 'fire'};
 }
@@ -34,10 +38,19 @@ export async function scheduleTriggerAlarm(taskId, whenMs) {
     await browser.alarms.create(name, {when});
 }
 
+/** @param {string} taskId @param {number} whenMs */
+export async function scheduleWindowEndAlarm(taskId, whenMs) {
+    const name = alarmNameForTask(taskId, 'window-end');
+    const when = Math.max(whenMs, Date.now() + 1000);
+    await browser.alarms.clear(name);
+    await browser.alarms.create(name, {when});
+}
+
 /** @param {string} taskId */
 export async function clearAlarm(taskId) {
     await browser.alarms.clear(alarmNameForTask(taskId, 'fire'));
     await browser.alarms.clear(alarmNameForTask(taskId, 'trigger'));
+    await browser.alarms.clear(alarmNameForTask(taskId, 'window-end'));
 }
 
 /** 启动时把仍应触发的任务重新注册到 alarms */
@@ -66,6 +79,14 @@ export async function syncAlarmsForTasks(tasks) {
             task.targetAt
         ) {
             await scheduleAlarm(task.id, task.targetAt);
+            if (
+                (task.type === TaskType.QUEUE || task.type === TaskType.LOOP) &&
+                task.windowEnd
+            ) {
+                const {todayWindowEndAt} = await import('./scheduleUtils.js');
+                const endMs = todayWindowEndAt(task.windowEnd);
+                if (endMs) await scheduleWindowEndAlarm(task.id, endMs);
+            }
         }
     }
 }

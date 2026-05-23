@@ -17,10 +17,12 @@
 |------|----------|------|
 | `schedule` | `repeatDays` 周重复，或 `date` 指定年月日一次性 | `enabled` 控制开关，到期后自动算下次 `fireAtMs` |
 | `countdown` | 保存 `durationMs`、`isFavorite` | `startCountdown` / `spawnCountdown` 创建 **instance** |
-| `loop` | 每轮 `durationMs` | `startLoop` 后持续循环直至 `cancel` 或 `enabled: false` |
-| `queue` | `steps[]`、`repeat`（整组循环） | `startQueue` 按步推进 |
+| `loop` | 每轮 `durationMs`；可选 `windowStart` / `windowEnd` / `repeatDays` | `startLoop` 后持续循环；设时段则每日自动开始、到点结束 |
+| `queue` | `steps[]`、`repeat`（整组循环）；可选时段字段 | `startQueue` 按步推进；时段内自动运行 |
 
-共用字段：`enabled`、`pinned`、`reminderMode`（`quick` | `blocking`）、`triggerAtMs`（定时引爆，到点自动 start）。
+共用字段：`enabled`、`pinned`、`reminderMode`（`quick` | `blocking`）、`triggerAtMs`（一次性定时引爆）。
+
+循环/队列时段：`windowStart`（如 09:00 自动上班开始）、`windowEnd`（如 18:00 下班停止）、`repeatDays`（默认每天）。保存后若仅设开始时间，会进入 `pending` 等待次日开始；时段内按间隔/步骤提醒，结束后等待下一日开始。
 
 ## 消息 API（`timer_task`）
 
@@ -28,7 +30,7 @@
 |--------|----------------|
 | `createSchedule` | `time`, `repeatDays?`, `date?`, `enabled?` |
 | `createCountdown` | `durationMs`, `startNow?`（true 会 spawn 实例）, `isFavorite?` |
-| `createLoop` / `createQueue` | 同前；`queue` 增加 `repeat?` |
+| `createLoop` / `createQueue` | 同前；`queue` 增加 `repeat?`；二者均可传 `windowStart?`, `windowEnd?`（`HH:mm` 或 `{hour,minute}`）, `repeatDays?` |
 | `createFromTemplate` | `templateId`, `overrides?` |
 | `spawnCountdown` | `id`（预设 id）, `options?` |
 | `startCountdown` / `pauseCountdown` / `resumeCountdown` / `startLoop` / `startQueue` | `id` |

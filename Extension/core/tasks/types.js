@@ -67,13 +67,23 @@
  */
 
 /**
+ * @typedef {object} TimeOfDay
+ * @property {number} hour 0-23
+ * @property {number} minute 0-59
+ */
+
+/**
  * @typedef {TaskBase & object} LoopTask
  * @property {'loop'} type
  * @property {number} durationMs
  * @property {number} [startedAt]
  * @property {number} [targetAt]
  * @property {number} cycleCount
- * @property {number | null} [triggerAtMs]
+ * @property {number | null} [triggerAtMs] 一次性定时引爆
+ * @property {TimeOfDay | null} [windowStart] 每日自动开始时刻
+ * @property {TimeOfDay | null} [windowEnd] 每日自动结束时刻
+ * @property {number[]} [repeatDays] 时段生效的星期 0=周日…6=周六
+ * @property {number | null} [nextWindowStartAtMs] 下次自动开始时间戳
  */
 
 /**
@@ -86,6 +96,10 @@
  * @property {number} [startedAt]
  * @property {number} [targetAt]
  * @property {number | null} [triggerAtMs]
+ * @property {TimeOfDay | null} [windowStart]
+ * @property {TimeOfDay | null} [windowEnd]
+ * @property {number[]} [repeatDays]
+ * @property {number | null} [nextWindowStartAtMs]
  */
 
 /** @typedef {ScheduleTask | CountdownTask | QueueTask | LoopTask} TimerTask */

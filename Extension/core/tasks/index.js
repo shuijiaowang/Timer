@@ -33,6 +33,10 @@ export {sortTasks} from './taskSort.js';
 export {
     remainingMs,
     parseTimeOfDay,
+    parseWindowTime,
     nextFireAt,
     nextScheduleFireAt,
+    nextWindowStartAt,
+    isWithinDailyWindow,
+    todayWindowEndAt,
 } from './scheduleUtils.js';
